@@ -1,0 +1,57 @@
+# PAN-OS Multi-Firewall Monitor Configuration
+# Replace the values below with your actual firewall details
+
+global:
+  # Storage and output settings
+  output_dir: "./output"              # Directory for exports and logs
+  output_type: "CSV"                  # Export format: CSV, XLSX, TXT
+  database_path: "./data/metrics.db"  # SQLite database path
+  
+  # Web interface settings
+  web_dashboard: true                 # Enable web dashboard
+  web_port: 8080                     # Dashboard port (http://localhost:8080)
+  
+  # Visualization and debugging
+  visualization: true                 # Generate PNG charts on export
+  save_raw_xml: false                # Save XML debug files (set true for troubleshooting)
+  xml_retention_hours: 24            # Hours to keep XML files
+  log_level: "WARNING"                  # DEBUG, INFO, WARNING, ERROR
+
+# Your firewall configurations
+firewalls:
+  # Example: Production datacenter firewall
+  datacenter_fw:
+    host: "https://10.100.192.3"      # Replace with your firewall IP/hostname
+    username: "user1-api"                 # Replace with your username
+    password: "Veritas21!"    # Replace with your actual password
+    verify_ssl: false                 # Set true if you have valid SSL certificates
+    enabled: true                     # Set false to temporarily disable
+    poll_interval: 60                 # Seconds between polls (recommended: 30-300)
+    dp_aggregation: "mean"            # mean=average, max=highest core, p95=95th percentile
+  
+  # Example: Branch office firewall
+  branch_fw:
+    host: "https://10.100.192.200"       # Replace with branch firewall IP
+    username: "admin"                 # Replace with username
+    password: "#.Veritas21"        # Replace with actual password
+    verify_ssl: false
+    enabled: true
+    poll_interval: 60                # More frequent polling for critical sites
+  
+  # Example: Development environment (optional)
+  dev_fw:
+    host: "https://192.168.100.1"     # Replace with dev firewall IP
+    username: "admin"
+    password: "DevPassword"
+    verify_ssl: true                  # Dev might have proper certs
+    enabled: false                    # Disabled by default
+    poll_interval: 60               # Less frequent for dev environment
+
+# Quick Start Instructions:
+# 1. Replace all IP addresses with your actual firewall management IPs
+# 2. Replace all passwords with your actual API passwords
+# 3. Set verify_ssl: true if your firewalls have valid SSL certificates
+# 4. Adjust poll_interval based on your needs (30-300 seconds recommended)
+# 5. Set enabled: false for any firewalls you don't want to monitor
+# 6. Save this file as config.yaml in the same directory as main.py
+# 7. Run: python main.py
