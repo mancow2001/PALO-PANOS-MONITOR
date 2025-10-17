@@ -253,9 +253,10 @@ def cleanup_old_xml_files(xml_dir: Path, retention_hours: int):
 class FirewallCollector:
     """Collector for a single firewall"""
     
-    def __init__(self, name: str, config, output_dir: Path):
+    def __init__(self, name: str, config, output_dir: Path, global_config=None):
         self.name = name
         self.config = config
+        self.global_config = global_config  # Store global configuration
         self.client = PanOSClient(config.host, config.verify_ssl)
         self.output_dir = output_dir
         self.xml_dir = output_dir / "raw_xml" / name
@@ -276,12 +277,15 @@ class FirewallCollector:
     
     def _save_raw_xml(self, name: str, content: str):
         """Save raw XML response for debugging"""
-        if not getattr(self.config, 'save_raw_xml', False):
+        # Check global config for save_raw_xml setting
+        if not self.global_config or not getattr(self.global_config, 'save_raw_xml', False):
             return
+            
         ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         file_path = self.xml_dir / f"{ts}_{name}.xml"
         try:
             file_path.write_text(content, encoding="utf-8")
+            LOG.debug(f"Saved raw XML to {file_path}")
         except Exception as e:
             LOG.warning(f"Failed to save XML for {self.name}: {e}")
     
@@ -306,6 +310,7 @@ class FirewallCollector:
                 self._save_raw_xml("system_resources", xml)
                 d, msg = parse_cpu_from_top(xml)
                 metrics.update(d)
+                LOG.debug(f"{self.name}: {msg}")
             else:
                 LOG.warning(f"{self.name}: Failed to get system resources: {self.client.last_error}")
         except Exception as e:
@@ -320,10 +325,12 @@ class FirewallCollector:
                 # DP CPU
                 d, msg = parse_dp_cpu_from_rm(xml)
                 metrics.update({k: v for k, v in d.items() if v is not None})
+                LOG.debug(f"{self.name}: {msg}")
                 
                 # Packet buffer
                 d2, msg2 = parse_pbuf_live_from_rm(xml)
                 metrics.update({k: v for k, v in d2.items() if v is not None})
+                LOG.debug(f"{self.name}: {msg2}")
             else:
                 LOG.warning(f"{self.name}: Failed to get resource monitor: {self.client.last_error}")
         except Exception as e:
@@ -336,6 +343,7 @@ class FirewallCollector:
                 self._save_raw_xml("session_info", xml)
                 d, msg = parse_throughput_from_session_info(xml)
                 metrics.update({k: v for k, v in d.items() if v is not None})
+                LOG.debug(f"{self.name}: {msg}")
             else:
                 LOG.warning(f"{self.name}: Failed to get session info: {self.client.last_error}")
         except Exception as e:
@@ -346,8 +354,11 @@ class FirewallCollector:
         metrics["firewall_name"] = self.name
         
         # Periodic XML cleanup
-        if getattr(self.config, 'save_raw_xml', False) and self.poll_count % 10 == 0:
-            cleanup_old_xml_files(self.xml_dir, getattr(self.config, 'xml_retention_hours', 24))
+        if (self.global_config and
+            getattr(self.global_config, 'save_raw_xml', False) and
+            self.poll_count % 10 == 0):
+            retention_hours = getattr(self.global_config, 'xml_retention_hours', 24)
+            cleanup_old_xml_files(self.xml_dir, retention_hours)
         
         self.last_poll_time = timestamp
         
@@ -361,20 +372,21 @@ class FirewallCollector:
 class MultiFirewallCollector:
     """Manages collection from multiple firewalls"""
     
-    def __init__(self, firewall_configs: Dict, output_dir: Path, database):
+    def __init__(self, firewall_configs: Dict, output_dir: Path, database, global_config=None):
         self.firewall_configs = firewall_configs
         self.output_dir = output_dir
         self.database = database
+        self.global_config = global_config  # Store global configuration
         self.collectors: Dict[str, FirewallCollector] = {}
         self.collection_threads: Dict[str, Thread] = {}
         self.stop_events: Dict[str, Event] = {}
         self.metrics_queue = Queue()
         self.running = False
         
-        # Initialize collectors
+        # Initialize collectors - pass global_config to each collector
         for name, config in firewall_configs.items():
             if config.enabled:
-                self.collectors[name] = FirewallCollector(name, config, output_dir)
+                self.collectors[name] = FirewallCollector(name, config, output_dir, global_config)
                 self.stop_events[name] = Event()
                 # Register firewall in database
                 self.database.register_firewall(name, config.host)

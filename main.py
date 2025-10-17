@@ -103,14 +103,15 @@ class PanOSMonitorApp:
         output_dir.mkdir(parents=True, exist_ok=True)
         LOG.info(f"Output directory: {output_dir}")
         
-        # Initialize collector manager
+        # Initialize collector manager - PASS GLOBAL CONFIG
         enabled_firewalls = self.config_manager.get_enabled_firewalls()
         if enabled_firewalls:
             LOG.info(f"Initializing collectors for {len(enabled_firewalls)} firewalls")
             self.collector_manager = MultiFirewallCollector(
                 enabled_firewalls,
                 output_dir,
-                self.database
+                self.database,
+                self.config_manager.global_config  # Pass global config here
             )
         
         # Initialize web dashboard
@@ -127,6 +128,11 @@ class PanOSMonitorApp:
         LOG.info("🚀 Starting PAN-OS Multi-Firewall Monitor")
         
         enabled_firewalls = self.config_manager.get_enabled_firewalls()
+        
+        # Log raw XML configuration
+        if self.config_manager.global_config.save_raw_xml:
+            LOG.info(f"📄 Raw XML saving enabled (retention: {self.config_manager.global_config.xml_retention_hours}h)")
+            LOG.info(f"📁 XML files will be saved to: {self.config_manager.global_config.output_dir}/raw_xml/")
         
         # Start web dashboard if enabled
         if self.web_dashboard:
@@ -204,6 +210,14 @@ class PanOSMonitorApp:
         active_count = sum(1 for s in status.values() if s['thread_alive'])
         
         LOG.info(f"📊 Status: {active_count}/{len(status)} collectors active")
+        
+        # Show raw XML status if enabled
+        if self.config_manager.global_config.save_raw_xml:
+            output_dir = Path(self.config_manager.global_config.output_dir)
+            xml_dir = output_dir / "raw_xml"
+            if xml_dir.exists():
+                xml_count = sum(1 for _ in xml_dir.rglob("*.xml"))
+                LOG.info(f"📄 Raw XML files: {xml_count} total")
         
         for name, collector_status in status.items():
             if collector_status['authenticated'] and collector_status['thread_alive']:
