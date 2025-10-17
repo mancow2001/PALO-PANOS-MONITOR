@@ -235,43 +235,54 @@ class PanOSMonitorApp:
     
     def _export_to_csv(self, firewall_name: str, metrics: list, output_dir: Path):
         """Export metrics to CSV format"""
+        if not PANDAS_OK:
+            LOG.warning("pandas not available for CSV export")
+            return
         try:
-            import pandas as pd
             df = pd.DataFrame(metrics)
             if not df.empty:
                 file_path = output_dir / f"{firewall_name}_metrics.csv"
                 df.to_csv(file_path, index=False)
                 LOG.info(f"📄 Exported {len(df)} records to {file_path}")
-        except ImportError:
-            LOG.warning("pandas not available for CSV export")
+        except Exception as e:
+            LOG.error(f"Failed to export CSV for {firewall_name}: {e}")
     
     def _export_to_xlsx(self, firewall_name: str, metrics: list, output_dir: Path):
         """Export metrics to Excel format"""
+        if not PANDAS_OK:
+            LOG.warning("pandas not available for Excel export")
+            return
         try:
-            import pandas as pd
             df = pd.DataFrame(metrics)
             if not df.empty:
                 file_path = output_dir / f"{firewall_name}_metrics.xlsx"
                 with pd.ExcelWriter(file_path, engine="openpyxl") as writer:
                     df.to_excel(writer, sheet_name="metrics", index=False)
                 LOG.info(f"📊 Exported {len(df)} records to {file_path}")
-        except ImportError:
-            LOG.warning("pandas/openpyxl not available for Excel export")
+        except Exception as e:
+            LOG.error(f"Failed to export Excel for {firewall_name}: {e}")
     
     def _export_to_txt(self, firewall_name: str, metrics: list, output_dir: Path):
         """Export metrics to text format"""
-        file_path = output_dir / f"{firewall_name}_metrics.txt"
-        with open(file_path, 'w') as f:
-            for metric in metrics:
-                f.write(str(metric) + "\n")
-        LOG.info(f"📝 Exported {len(metrics)} records to {file_path}")
+        try:
+            file_path = output_dir / f"{firewall_name}_metrics.txt"
+            with open(file_path, 'w') as f:
+                for metric in metrics:
+                    f.write(str(metric) + "\n")
+            LOG.info(f"📝 Exported {len(metrics)} records to {file_path}")
+        except Exception as e:
+            LOG.error(f"Failed to export TXT for {firewall_name}: {e}")
     
     def _generate_visualizations(self, output_dir: Path):
         """Generate visualization charts"""
-        try:
-            import matplotlib.pyplot as plt
-            import pandas as pd
+        if not MATPLOTLIB_OK:
+            LOG.warning("matplotlib not available for visualization generation")
+            return
+        if not PANDAS_OK:
+            LOG.warning("pandas not available for visualization generation")
+            return
             
+        try:
             for firewall_name in self.config_manager.list_firewalls():
                 metrics = self.database.export_metrics_to_dict(firewall_name)
                 if not metrics:
@@ -290,15 +301,15 @@ class PanOSMonitorApp:
                 
                 # Generate individual charts
                 self._create_chart(df, 'mgmt_cpu', 'Management CPU (%)', charts_dir / "mgmt_cpu.png")
-                self._create_chart(df, 'data_plane_cpu', 'Data Plane CPU (%)', charts_dir / "dp_cpu.png")
+                self._create_chart(df, 'data_plane_cpu_mean', 'Data Plane CPU Mean (%)', charts_dir / "dp_cpu_mean.png")
+                self._create_chart(df, 'data_plane_cpu_max', 'Data Plane CPU Max (%)', charts_dir / "dp_cpu_max.png")
+                self._create_chart(df, 'data_plane_cpu_p95', 'Data Plane CPU P95 (%)', charts_dir / "dp_cpu_p95.png")
                 self._create_chart(df, 'throughput_mbps_total', 'Throughput (Mbps)', charts_dir / "throughput.png")
                 self._create_chart(df, 'pps_total', 'Packets per Second', charts_dir / "pps.png")
                 self._create_chart(df, 'pbuf_util_percent', 'Packet Buffer (%)', charts_dir / "packet_buffer.png")
                 
                 LOG.info(f"📈 Generated charts for {firewall_name} in {charts_dir}")
                 
-        except ImportError:
-            LOG.warning("matplotlib/pandas not available for visualization generation")
         except Exception as e:
             LOG.error(f"Failed to generate visualizations: {e}")
     
@@ -307,15 +318,18 @@ class PanOSMonitorApp:
         if column not in df.columns or df[column].isna().all():
             return
         
-        plt.figure(figsize=(12, 6))
-        plt.plot(df['timestamp'], df[column], linewidth=2)
-        plt.title(title)
-        plt.xlabel('Time')
-        plt.ylabel(title.split('(')[-1].rstrip(')') if '(' in title else 'Value')
-        plt.xticks(rotation=45)
-        plt.tight_layout()
-        plt.savefig(file_path, dpi=150, bbox_inches='tight')
-        plt.close()
+        try:
+            plt.figure(figsize=(12, 6))
+            plt.plot(df['timestamp'], df[column], linewidth=2)
+            plt.title(title)
+            plt.xlabel('Time')
+            plt.ylabel(title.split('(')[-1].rstrip(')') if '(' in title else 'Value')
+            plt.xticks(rotation=45)
+            plt.tight_layout()
+            plt.savefig(file_path, dpi=150, bbox_inches='tight')
+            plt.close()
+        except Exception as e:
+            LOG.error(f"Failed to create chart {title}: {e}")
 
 def create_config_command(args):
     """Create example configuration file"""
