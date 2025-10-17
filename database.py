@@ -229,8 +229,8 @@ class MetricsDatabase:
     def cleanup_old_metrics(self, days_to_keep: int = 30) -> int:
         """Remove metrics older than specified days"""
         try:
-            cutoff_time = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-            cutoff_time = cutoff_time.replace(day=cutoff_time.day - days_to_keep)
+            from datetime import timedelta
+            cutoff_time = datetime.now(timezone.utc) - timedelta(days=days_to_keep)
             
             with self._get_connection() as conn:
                 cursor = conn.execute("""

@@ -17,6 +17,15 @@ from database import MetricsDatabase
 from collectors import MultiFirewallCollector
 from web_dashboard import WebDashboard
 
+try:
+    import matplotlib
+    matplotlib.use('Agg')  # Use non-interactive backend
+    import matplotlib.pyplot as plt
+    MATPLOTLIB_OK = True
+except ImportError:
+    plt = None
+    MATPLOTLIB_OK = False
+
 LOG = logging.getLogger("panos_monitor.main")
 
 class GracefulKiller:
@@ -231,7 +240,10 @@ class PanOSMonitorApp:
         
         # Generate visualizations if enabled
         if self.config_manager.global_config.visualization:
-            self._generate_visualizations(output_dir)
+            try:
+                self._generate_visualizations(output_dir)
+            except Exception as e:
+                LOG.error(f"Failed to generate visualizations: {e}")
     
     def _export_to_csv(self, firewall_name: str, metrics: list, output_dir: Path):
         """Export metrics to CSV format"""
