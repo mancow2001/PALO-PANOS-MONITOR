@@ -6,12 +6,108 @@ Provides persistent storage for metrics data using SQLite
 import sqlite3
 import logging
 import json
+import re
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Tuple
 from contextlib import contextmanager
 
 LOG = logging.getLogger("panos_monitor.database")
+
+def parse_iso_datetime(timestamp_str: str) -> datetime:
+    """
+    Parse ISO datetime string - compatible with Python 3.6+
+    Handles various ISO format variations
+    """
+    if not timestamp_str:
+        return datetime.now(timezone.utc)
+    
+    # Remove 'Z' and replace with +00:00 for UTC
+    if timestamp_str.endswith('Z'):
+        timestamp_str = timestamp_str[:-1] + '+00:00'
+    
+    # Try different parsing approaches for Python 3.6 compatibility
+    patterns = [
+        # With timezone
+        r'(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})\.?(\d{0,6})?([+-]\d{2}:\d{2})',
+        # Without timezone (assume UTC)
+        r'(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})\.?(\d{0,6})?$',
+        # Date only
+        r'(\d{4}-\d{2}-\d{2})$'
+    ]
+    
+    for pattern in patterns:
+        match = re.match(pattern, timestamp_str)
+        if match:
+            try:
+                if len(match.groups()) == 3 and match.group(3):
+                    # Has timezone
+                    dt_part = match.group(1)
+                    microseconds = (match.group(2) or '').ljust(6, '0')[:6]
+                    tz_part = match.group(3)
+                    
+                    # Parse base datetime
+                    dt = datetime.strptime(dt_part, '%Y-%m-%dT%H:%M:%S')
+                    
+                    # Add microseconds if present
+                    if microseconds:
+                        dt = dt.replace(microsecond=int(microseconds))
+                    
+                    # Parse timezone
+                    if tz_part == '+00:00' or tz_part == '-00:00':
+                        dt = dt.replace(tzinfo=timezone.utc)
+                    else:
+                        # Parse offset
+                        sign = 1 if tz_part[0] == '+' else -1
+                        hours, minutes = map(int, tz_part[1:].split(':'))
+                        offset = timedelta(hours=sign*hours, minutes=sign*minutes)
+                        tz = timezone(offset)
+                        dt = dt.replace(tzinfo=tz)
+                    
+                    return dt
+                    
+                elif len(match.groups()) >= 2:
+                    # No timezone, assume UTC
+                    dt_part = match.group(1)
+                    microseconds = (match.group(2) or '').ljust(6, '0')[:6] if len(match.groups()) > 1 else ''
+                    
+                    if 'T' in dt_part:
+                        dt = datetime.strptime(dt_part, '%Y-%m-%dT%H:%M:%S')
+                    else:
+                        dt = datetime.strptime(dt_part, '%Y-%m-%d')
+                    
+                    # Add microseconds if present
+                    if microseconds:
+                        dt = dt.replace(microsecond=int(microseconds))
+                    
+                    # Assume UTC if no timezone specified
+                    dt = dt.replace(tzinfo=timezone.utc)
+                    return dt
+                    
+            except ValueError as e:
+                LOG.warning(f"Failed to parse datetime with pattern {pattern}: {e}")
+                continue
+    
+    # Fallback: try simple formats
+    simple_formats = [
+        '%Y-%m-%dT%H:%M:%S.%fZ',
+        '%Y-%m-%dT%H:%M:%SZ',
+        '%Y-%m-%dT%H:%M:%S.%f',
+        '%Y-%m-%dT%H:%M:%S',
+        '%Y-%m-%d %H:%M:%S',
+        '%Y-%m-%d'
+    ]
+    
+    for fmt in simple_formats:
+        try:
+            dt = datetime.strptime(timestamp_str.replace('Z', ''), fmt.replace('Z', ''))
+            # Assume UTC if no timezone info
+            return dt.replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+    
+    LOG.warning(f"Could not parse timestamp '{timestamp_str}', using current time")
+    return datetime.now(timezone.utc)
 
 class MetricsDatabase:
     """SQLite database for storing firewall metrics"""
@@ -113,9 +209,12 @@ class MetricsDatabase:
                 # Convert timestamp string to datetime if needed
                 timestamp = metrics.get('timestamp')
                 if isinstance(timestamp, str):
-                    timestamp = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                    timestamp = parse_iso_datetime(timestamp)
                 elif timestamp is None:
                     timestamp = datetime.now(timezone.utc)
+                elif isinstance(timestamp, datetime) and timestamp.tzinfo is None:
+                    # Add UTC timezone if missing
+                    timestamp = timestamp.replace(tzinfo=timezone.utc)
                 
                 conn.execute("""
                     INSERT INTO metrics (
@@ -252,8 +351,8 @@ class MetricsDatabase:
                                   end_date: str) -> List[Dict[str, Any]]:
         """Get metrics for a specific date range (YYYY-MM-DD format)"""
         try:
-            start_dt = datetime.fromisoformat(f"{start_date}T00:00:00+00:00")
-            end_dt = datetime.fromisoformat(f"{end_date}T23:59:59+00:00")
+            start_dt = parse_iso_datetime(f"{start_date}T00:00:00+00:00")
+            end_dt = parse_iso_datetime(f"{end_date}T23:59:59+00:00")
             return self.get_metrics(firewall_name, start_dt, end_dt)
         except Exception as e:
             LOG.error(f"Failed to get metrics for date range: {e}")
@@ -270,7 +369,7 @@ class MetricsDatabase:
                 if isinstance(metric['timestamp'], str):
                     # Already a string, ensure it's ISO format
                     try:
-                        dt = datetime.fromisoformat(metric['timestamp'].replace('Z', '+00:00'))
+                        dt = parse_iso_datetime(metric['timestamp'])
                         metric['timestamp'] = dt.isoformat()
                     except:
                         pass  # Keep original if parsing fails

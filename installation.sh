@@ -8,6 +8,8 @@
 #   sudo ./installation.sh              # Install
 #   sudo ./installation.sh --uninstall  # Uninstall
 #   sudo ./installation.sh -u           # Uninstall (short)
+#   dzdo ./installation.sh              # Install (with Centrify)
+#   dzdo ./installation.sh --uninstall  # Uninstall (with Centrify)
 #
 
 set -e  # Exit on any error
@@ -54,25 +56,61 @@ print_header() {
     echo
 }
 
-# Check if running as root
-check_root() {
-    if [[ $EUID -ne 0 ]]; then
-        print_error "This script must be run as root or with sudo"
-        echo "Usage: sudo $0"
-        exit 1
+# Detect elevation command (sudo or dzdo)
+detect_elevation_cmd() {
+    if command -v dzdo >/dev/null 2>&1; then
+        ELEVATION_CMD="dzdo"
+        print_info "Detected Centrify dzdo for privilege escalation"
+    elif command -v sudo >/dev/null 2>&1; then
+        ELEVATION_CMD="sudo"
+        print_info "Using sudo for privilege escalation"
+    else
+        ELEVATION_CMD=""
     fi
 }
 
-# Detect OS and package manager
+# Check if running as root
+check_root() {
+    if [[ $EUID -ne 0 ]]; then
+        detect_elevation_cmd
+        if [[ -n "$ELEVATION_CMD" ]]; then
+            print_error "This script must be run as root or with $ELEVATION_CMD"
+            echo "Usage: $ELEVATION_CMD $0"
+        else
+            print_error "This script must be run as root"
+            echo "No sudo or dzdo found. Please run as root or install sudo/dzdo."
+        fi
+        exit 1
+    fi
+    
+    # Set elevation command for use in script
+    detect_elevation_cmd
+}
+
+# Detect OS and package manager with more detailed RHEL detection
 detect_os() {
     if [[ -f /etc/redhat-release ]]; then
         OS="redhat"
+        
+        # Get RHEL version for specific handling
+        if grep -q "release 7" /etc/redhat-release; then
+            RHEL_VERSION="7"
+        elif grep -q "release 8" /etc/redhat-release; then
+            RHEL_VERSION="8"
+        elif grep -q "release 9" /etc/redhat-release; then
+            RHEL_VERSION="9"
+        else
+            RHEL_VERSION="unknown"
+        fi
+        
         if command -v dnf >/dev/null 2>&1; then
             PKG_MGR="dnf"
         else
             PKG_MGR="yum"
         fi
-        print_info "Detected Red Hat-based system using $PKG_MGR"
+        
+        print_info "Detected Red Hat-based system (version $RHEL_VERSION) using $PKG_MGR"
+        
     elif [[ -f /etc/debian_version ]]; then
         OS="debian"
         PKG_MGR="apt"
@@ -84,16 +122,104 @@ detect_os() {
     fi
 }
 
-# Install system dependencies
+# Enable required repositories for RHEL/CentOS
+enable_repositories() {
+    if [[ "$OS" == "redhat" ]]; then
+        print_info "Enabling required repositories..."
+        
+        case "$RHEL_VERSION" in
+            "7")
+                # RHEL/CentOS 7
+                if command -v subscription-manager >/dev/null 2>&1; then
+                    # RHEL 7
+                    subscription-manager repos --enable=rhel-7-server-optional-rpms || print_warning "Could not enable optional repos (may not be needed)"
+                else
+                    # CentOS 7 - install EPEL
+                    if ! rpm -qa | grep -q epel-release; then
+                        yum install -y epel-release
+                    fi
+                fi
+                ;;
+            "8")
+                # RHEL/CentOS/Rocky/Alma 8
+                if command -v subscription-manager >/dev/null 2>&1; then
+                    # RHEL 8
+                    subscription-manager repos --enable=rhel-8-for-x86_64-appstream-rpms || print_warning "Could not enable appstream repos"
+                    subscription-manager repos --enable=codeready-builder-for-rhel-8-x86_64-rpms || print_warning "Could not enable codeready-builder"
+                else
+                    # Rocky/Alma/CentOS 8
+                    if command -v dnf >/dev/null 2>&1; then
+                        dnf config-manager --enable powertools 2>/dev/null || \
+                        dnf config-manager --enable PowerTools 2>/dev/null || \
+                        dnf config-manager --enable crb 2>/dev/null || \
+                        print_warning "Could not enable powertools/CRB repository"
+                    fi
+                    
+                    # Install EPEL if available
+                    if ! rpm -qa | grep -q epel-release; then
+                        $PKG_MGR install -y epel-release || print_warning "EPEL not available"
+                    fi
+                fi
+                ;;
+            "9")
+                # RHEL/Rocky/Alma 9
+                if command -v subscription-manager >/dev/null 2>&1; then
+                    # RHEL 9
+                    subscription-manager repos --enable=rhel-9-for-x86_64-appstream-rpms || print_warning "Could not enable appstream repos"
+                    subscription-manager repos --enable=codeready-builder-for-rhel-9-x86_64-rpms || print_warning "Could not enable codeready-builder"
+                else
+                    # Rocky/Alma 9
+                    if command -v dnf >/dev/null 2>&1; then
+                        dnf config-manager --enable crb 2>/dev/null || print_warning "Could not enable CRB repository"
+                    fi
+                    
+                    # Install EPEL if available
+                    if ! rpm -qa | grep -q epel-release; then
+                        $PKG_MGR install -y epel-release || print_warning "EPEL not available"
+                    fi
+                fi
+                ;;
+        esac
+        
+        print_success "Repository configuration completed"
+    fi
+}
+
+# Install system dependencies with RHEL-specific packages
 install_system_deps() {
     print_info "Installing system dependencies..."
     
     if [[ "$OS" == "redhat" ]]; then
-        $PKG_MGR update -y
-        $PKG_MGR groupinstall -y "Development Tools"
-        $PKG_MGR install -y python3 python3-pip python3-venv python3-devel \
-                           openssl-devel libffi-devel sqlite-devel \
-                           systemd curl wget
+        # Update package cache
+        $PKG_MGR makecache
+        
+        # Install development tools
+        if [[ "$RHEL_VERSION" == "7" ]]; then
+            # RHEL/CentOS 7 packages
+            $PKG_MGR groupinstall -y "Development Tools"
+            $PKG_MGR install -y python3 python3-pip python3-devel \
+                               openssl-devel libffi-devel sqlite-devel \
+                               systemd curl wget gcc gcc-c++ make \
+                               zlib-devel bzip2-devel readline-devel \
+                               xz-devel tk-devel
+        else
+            # RHEL/CentOS 8+ packages
+            $PKG_MGR groupinstall -y "Development Tools"
+            $PKG_MGR install -y python3 python3-pip python3-devel \
+                               openssl-devel libffi-devel sqlite-devel \
+                               systemd curl wget gcc gcc-c++ make \
+                               zlib-devel bzip2-devel readline-devel \
+                               xz-devel tk-devel python3-venv
+        fi
+        
+        # Ensure python3-venv is available (sometimes missing on RHEL)
+        if ! python3 -m venv --help >/dev/null 2>&1; then
+            print_warning "python3-venv not working, trying alternative installation..."
+            if [[ "$RHEL_VERSION" == "7" ]]; then
+                $PKG_MGR install -y python3-venv || print_warning "python3-venv package not available"
+            fi
+        fi
+        
     elif [[ "$OS" == "debian" ]]; then
         apt update
         apt install -y python3 python3-pip python3-venv python3-dev \
@@ -101,7 +227,24 @@ install_system_deps() {
                        libsqlite3-dev systemd curl wget
     fi
     
+    # Verify Python 3 installation
+    if ! command -v python3 >/dev/null 2>&1; then
+        print_error "Python 3 not found after installation"
+        exit 1
+    fi
+    
+    # Verify pip3 installation
+    if ! command -v pip3 >/dev/null 2>&1; then
+        print_warning "pip3 not found, attempting to install via get-pip.py..."
+        curl -sS https://bootstrap.pypa.io/get-pip.py | python3
+    fi
+    
+    # Upgrade pip to latest version
+    python3 -m pip install --upgrade pip
+    
     print_success "System dependencies installed"
+    print_info "Python version: $(python3 --version)"
+    print_info "Pip version: $(python3 -m pip --version)"
 }
 
 # Create service user and group
@@ -146,25 +289,66 @@ create_directories() {
     print_success "Directory structure created"
 }
 
-# Create Python virtual environment
+# Create Python virtual environment with better error handling
 create_venv() {
     print_info "Creating Python virtual environment..."
     
-    # Create virtual environment as service user
-    sudo -u "$SERVICE_USER" python3 -m venv "$VENV_DIR"
+    # Test venv module first
+    if ! python3 -m venv --help >/dev/null 2>&1; then
+        print_error "Python venv module not available"
+        print_info "Attempting to install python3-venv package..."
+        
+        if [[ "$OS" == "redhat" ]]; then
+            $PKG_MGR install -y python3-venv || {
+                print_error "Failed to install python3-venv package"
+                print_info "Trying alternative: virtualenv"
+                python3 -m pip install virtualenv
+                if [[ -n "$ELEVATION_CMD" ]]; then
+                    $ELEVATION_CMD -u "$SERVICE_USER" python3 -m virtualenv "$VENV_DIR"
+                else
+                    su - "$SERVICE_USER" -s /bin/bash -c "python3 -m virtualenv '$VENV_DIR'"
+                fi
+                print_success "Virtual environment created using virtualenv"
+                return
+            }
+        fi
+    fi
     
-    # Upgrade pip
-    sudo -u "$SERVICE_USER" "$VENV_DIR/bin/pip" install --upgrade pip
+    # Create virtual environment as service user
+    if [[ -n "$ELEVATION_CMD" ]]; then
+        $ELEVATION_CMD -u "$SERVICE_USER" python3 -m venv "$VENV_DIR"
+    else
+        su - "$SERVICE_USER" -s /bin/bash -c "python3 -m venv '$VENV_DIR'"
+    fi
+    
+    # Verify virtual environment was created
+    if [[ ! -f "$VENV_DIR/bin/python" ]]; then
+        print_error "Virtual environment creation failed"
+        exit 1
+    fi
+    
+    # Upgrade pip in virtual environment
+    if [[ -n "$ELEVATION_CMD" ]]; then
+        $ELEVATION_CMD -u "$SERVICE_USER" "$VENV_DIR/bin/python" -m pip install --upgrade pip
+    else
+        su - "$SERVICE_USER" -s /bin/bash -c "'$VENV_DIR/bin/python' -m pip install --upgrade pip"
+    fi
     
     print_success "Virtual environment created"
+    print_info "Virtual env Python: $("$VENV_DIR/bin/python" --version)"
 }
 
-# Install Python dependencies
+# Install Python dependencies with better error handling
 install_python_deps() {
     print_info "Installing Python dependencies..."
     
-    # Create requirements.txt if it doesn't exist
-    cat > "$INSTALL_DIR/requirements.txt" << 'EOF'
+    # Check if requirements.txt exists in current directory and copy it
+    if [[ -f "requirements.txt" ]]; then
+        print_info "Using existing requirements.txt file"
+        cp "requirements.txt" "$INSTALL_DIR/requirements.txt"
+    else
+        print_warning "requirements.txt not found in current directory, creating default one"
+        cat > "$INSTALL_DIR/requirements.txt" << 'EOF'
 requests>=2.25.0
 PyYAML>=6.0
 pandas>=1.3.0
@@ -175,11 +359,58 @@ uvicorn[standard]>=0.15.0
 jinja2>=3.0.0
 python-dotenv>=0.19.0
 EOF
+        print_info "Created default requirements.txt - you may want to customize it"
+    fi
     
-    # Install dependencies
-    sudo -u "$SERVICE_USER" "$VENV_DIR/bin/pip" install -r "$INSTALL_DIR/requirements.txt"
+    # Set ownership of requirements file
+    chown "$SERVICE_USER:$SERVICE_GROUP" "$INSTALL_DIR/requirements.txt"
     
-    print_success "Python dependencies installed"
+    # Install dependencies with retry logic
+    print_info "Installing Python packages (this may take a few minutes)..."
+    
+    # First, install wheel to help with compilation
+    if [[ -n "$ELEVATION_CMD" ]]; then
+        $ELEVATION_CMD -u "$SERVICE_USER" "$VENV_DIR/bin/pip" install wheel
+    else
+        su - "$SERVICE_USER" -s /bin/bash -c "'$VENV_DIR/bin/pip' install wheel"
+    fi
+    
+    # Install dependencies one by one with better error handling
+    while IFS= read -r requirement; do
+        if [[ -n "$requirement" ]] && [[ ! "$requirement" =~ ^#.* ]]; then
+            print_info "Installing: $requirement"
+            if [[ -n "$ELEVATION_CMD" ]]; then
+                if ! $ELEVATION_CMD -u "$SERVICE_USER" "$VENV_DIR/bin/pip" install "$requirement"; then
+                    print_warning "Failed to install $requirement, but continuing..."
+                fi
+            else
+                if ! su - "$SERVICE_USER" -s /bin/bash -c "'$VENV_DIR/bin/pip' install '$requirement'"; then
+                    print_warning "Failed to install $requirement, but continuing..."
+                fi
+            fi
+        fi
+    done < "$INSTALL_DIR/requirements.txt"
+    
+    # Verify key packages are installed
+    print_info "Verifying installation..."
+    key_packages=("requests" "yaml" "pandas" "fastapi" "uvicorn")
+    for package in "${key_packages[@]}"; do
+        if [[ -n "$ELEVATION_CMD" ]]; then
+            if $ELEVATION_CMD -u "$SERVICE_USER" "$VENV_DIR/bin/python" -c "import $package" 2>/dev/null; then
+                print_success "$package: OK"
+            else
+                print_warning "$package: Failed to import"
+            fi
+        else
+            if su - "$SERVICE_USER" -s /bin/bash -c "'$VENV_DIR/bin/python' -c 'import $package'" 2>/dev/null; then
+                print_success "$package: OK"
+            else
+                print_warning "$package: Failed to import"
+            fi
+        fi
+    done
+    
+    print_success "Python dependencies installation completed"
 }
 
 # Copy application files
@@ -287,7 +518,7 @@ EOF
     print_warning "Please edit $CONFIG_DIR/config.yaml to configure your firewalls"
 }
 
-# Create systemd service
+# Create systemd service with proper PATH
 create_service() {
     print_info "Creating systemd service..."
     
@@ -303,7 +534,8 @@ Type=simple
 User=$SERVICE_USER
 Group=$SERVICE_GROUP
 WorkingDirectory=$INSTALL_DIR
-Environment=PATH=$VENV_DIR/bin
+Environment=PATH=$VENV_DIR/bin:/usr/local/bin:/usr/bin:/bin
+Environment=PYTHONPATH=$INSTALL_DIR
 ExecStart=$VENV_DIR/bin/python main.py --config $CONFIG_DIR/config.yaml
 ExecReload=/bin/kill -HUP \$MAINPID
 Restart=always
@@ -359,9 +591,27 @@ EOF
 create_helper_scripts() {
     print_info "Creating helper scripts..."
     
+    # Create elevation wrapper function
+    local elevation_wrapper=""
+    if [[ -n "$ELEVATION_CMD" ]]; then
+        elevation_wrapper="ELEVATION_CMD=\"$ELEVATION_CMD\""
+    else
+        elevation_wrapper='
+# Detect elevation command
+if command -v dzdo >/dev/null 2>&1; then
+    ELEVATION_CMD="dzdo"
+elif command -v sudo >/dev/null 2>&1; then
+    ELEVATION_CMD="sudo"
+else
+    ELEVATION_CMD=""
+fi'
+    fi
+    
     # Status script
     cat > "/usr/local/bin/${SERVICE_NAME}-status" << EOF
 #!/bin/bash
+$elevation_wrapper
+
 echo "=== PAN-OS Monitor Service Status ==="
 systemctl status $SERVICE_NAME --no-pager -l
 echo
@@ -375,15 +625,31 @@ EOF
     # Control script
     cat > "/usr/local/bin/${SERVICE_NAME}-control" << EOF
 #!/bin/bash
+$elevation_wrapper
+
+# Function to run commands with appropriate elevation
+run_elevated() {
+    if [[ \$EUID -eq 0 ]]; then
+        # Already root
+        "\$@"
+    elif [[ -n "\$ELEVATION_CMD" ]]; then
+        # Use detected elevation command
+        "\$ELEVATION_CMD" "\$@"
+    else
+        echo "Error: No elevation command available (sudo/dzdo) and not running as root"
+        exit 1
+    fi
+}
+
 case "\$1" in
     start)
-        systemctl start $SERVICE_NAME
+        run_elevated systemctl start $SERVICE_NAME
         ;;
     stop)
-        systemctl stop $SERVICE_NAME
+        run_elevated systemctl stop $SERVICE_NAME
         ;;
     restart)
-        systemctl restart $SERVICE_NAME
+        run_elevated systemctl restart $SERVICE_NAME
         ;;
     status)
         ${SERVICE_NAME}-status
@@ -392,10 +658,36 @@ case "\$1" in
         journalctl -u $SERVICE_NAME -f
         ;;
     config)
-        \${EDITOR:-nano} $CONFIG_DIR/config.yaml
+        if [[ \$EUID -eq 0 ]]; then
+            \${EDITOR:-nano} $CONFIG_DIR/config.yaml
+        elif [[ -n "\$ELEVATION_CMD" ]]; then
+            \$ELEVATION_CMD \${EDITOR:-nano} $CONFIG_DIR/config.yaml
+        else
+            echo "Error: Root privileges required to edit configuration"
+            echo "Try: \${ELEVATION_CMD:-sudo} \${EDITOR:-nano} $CONFIG_DIR/config.yaml"
+            exit 1
+        fi
+        ;;
+    install-deps)
+        echo "Reinstalling Python dependencies..."
+        if [[ -n "\$ELEVATION_CMD" ]]; then
+            \$ELEVATION_CMD -u $SERVICE_USER $VENV_DIR/bin/pip install -r $INSTALL_DIR/requirements.txt
+        else
+            echo "Error: Elevation command required"
+            exit 1
+        fi
         ;;
     *)
-        echo "Usage: \$0 {start|stop|restart|status|logs|config}"
+        echo "Usage: \$0 {start|stop|restart|status|logs|config|install-deps}"
+        echo
+        echo "Commands:"
+        echo "  start        Start the service"
+        echo "  stop         Stop the service"
+        echo "  restart      Restart the service"
+        echo "  status       Show service status and recent logs"
+        echo "  logs         Follow service logs in real-time"
+        echo "  config       Edit configuration file"
+        echo "  install-deps Reinstall Python dependencies"
         exit 1
         ;;
 esac
@@ -417,6 +709,7 @@ install() {
     
     check_root
     detect_os
+    enable_repositories
     
     # Stop service if it's running
     if systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
@@ -546,15 +839,29 @@ test_installation() {
     done
     
     # Check if Python environment works
-    if ! sudo -u "$SERVICE_USER" "$VENV_DIR/bin/python" -c "import sys; print('Python OK')" >/dev/null 2>&1; then
-        print_error "Python environment not working"
-        return 1
+    if [[ -n "$ELEVATION_CMD" ]]; then
+        if ! $ELEVATION_CMD -u "$SERVICE_USER" "$VENV_DIR/bin/python" -c "import sys; print('Python OK')" >/dev/null 2>&1; then
+            print_error "Python environment not working"
+            return 1
+        fi
+    else
+        if ! su - "$SERVICE_USER" -s /bin/bash -c "'$VENV_DIR/bin/python' -c 'import sys; print(\"Python OK\")'" >/dev/null 2>&1; then
+            print_error "Python environment not working"
+            return 1
+        fi
     fi
     
     # Check if main application can import
-    if ! sudo -u "$SERVICE_USER" "$VENV_DIR/bin/python" -c "import sys; sys.path.append('$INSTALL_DIR'); import main" >/dev/null 2>&1; then
-        print_error "Application import failed"
-        return 1
+    if [[ -n "$ELEVATION_CMD" ]]; then
+        if ! $ELEVATION_CMD -u "$SERVICE_USER" "$VENV_DIR/bin/python" -c "import sys; sys.path.append('$INSTALL_DIR'); import main" >/dev/null 2>&1; then
+            print_error "Application import failed"
+            return 1
+        fi
+    else
+        if ! su - "$SERVICE_USER" -s /bin/bash -c "'$VENV_DIR/bin/python' -c 'import sys; sys.path.append(\"$INSTALL_DIR\"); import main'" >/dev/null 2>&1; then
+            print_error "Application import failed"
+            return 1
+        fi
     fi
     
     # Check if templates directory exists (optional)
@@ -585,6 +892,10 @@ main() {
             echo "  -u, --uninstall   Uninstall the service"
             echo "  --test        Test existing installation"
             echo "  -h, --help    Show this help message"
+            echo
+            echo "Privilege Escalation:"
+            echo "  Run with sudo:  sudo $0"
+            echo "  Run with dzdo:  dzdo $0"
             echo
             ;;
         "")
