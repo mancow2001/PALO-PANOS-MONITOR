@@ -18,6 +18,13 @@ from collectors import MultiFirewallCollector
 from web_dashboard import WebDashboard
 
 try:
+    import pandas as pd
+    PANDAS_OK = True
+except ImportError:
+    pd = None
+    PANDAS_OK = False
+
+try:
     import matplotlib
     matplotlib.use('Agg')  # Use non-interactive backend
     import matplotlib.pyplot as plt
