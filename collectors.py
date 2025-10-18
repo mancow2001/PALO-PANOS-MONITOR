@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Data collection modules for PAN-OS Multi-Firewall Monitor
+Updated with enhanced Management CPU detection using debug status method
 """
 import time
 import logging
@@ -95,6 +96,28 @@ class PanOSClient:
             self.last_error = f"Unexpected error: {e}"
             return None
 
+    def request(self, xml_cmd: str) -> Optional[str]:
+        """Execute request command and return XML response"""
+        if not self.api_key:
+            self.last_error = "API key not set; call keygen() first"
+            return None
+            
+        url = f"{self.base}/api/"
+        params = {"type": "op", "cmd": xml_cmd, "key": self.api_key}
+        
+        try:
+            resp = self.session.get(url, params=params, timeout=30)
+            resp.raise_for_status()
+            self.last_error = None
+            return resp.text
+            
+        except RequestException as e:
+            self.last_error = f"API request error: {e}"
+            return None
+        except Exception as e:
+            self.last_error = f"Unexpected error: {e}"
+            return None
+
 def _numbers_from_csv(text: str) -> List[float]:
     """Extract numbers from comma-separated text"""
     nums: List[float] = []
@@ -118,8 +141,92 @@ def _aggregate(values: List[float], mode: str = "mean") -> float:
         return s[idx]
     return sum(values) / len(values)
 
+def parse_cpu_from_system_info(xml_text: str) -> Tuple[Dict[str, float], str]:
+    """
+    Parse management CPU from system info - more reliable than top
+    Uses: <show><s><info/></s></show>
+    """
+    out: Dict[str, float] = {}
+    try:
+        root = ET.fromstring(xml_text)
+        
+        # Look for system info load average fields
+        load_avg_1min = root.findtext(".//system/load-avg-1-min")
+        load_avg_5min = root.findtext(".//system/load-avg-5-min")
+        load_avg_15min = root.findtext(".//system/load-avg-15-min")
+        
+        if load_avg_1min:
+            try:
+                # Load average is typically 0-N (where N is number of cores)
+                # Convert to rough CPU percentage (load avg * 100, capped at 100%)
+                load_avg = float(load_avg_1min)
+                cpu_percent = min(load_avg * 100, 100.0)
+                out.update({
+                    "mgmt_cpu": cpu_percent,
+                    "mgmt_cpu_load_avg": cpu_percent,
+                    "load_avg_1min": load_avg
+                })
+                
+                # Add 5min and 15min if available
+                if load_avg_5min:
+                    out["load_avg_5min"] = float(load_avg_5min)
+                if load_avg_15min:
+                    out["load_avg_15min"] = float(load_avg_15min)
+                
+                return out, f"cpu: system info load avg {load_avg} ({cpu_percent:.1f}%)"
+            except ValueError:
+                pass
+        
+        # Alternative: look for uptime field which might contain load average
+        uptime = root.findtext(".//system/uptime") or ""
+        if "load average:" in uptime.lower():
+            # Extract load average from uptime string
+            # Format: "up 1 day, 2:34, load average: 0.15, 0.10, 0.05"
+            match = re.search(r"load average:\s*([0-9.]+)", uptime, re.IGNORECASE)
+            if match:
+                load_avg = float(match.group(1))
+                cpu_percent = min(load_avg * 100, 100.0)
+                out.update({
+                    "mgmt_cpu": cpu_percent,
+                    "mgmt_cpu_load_avg": cpu_percent,
+                    "load_avg_1min": load_avg
+                })
+                return out, f"cpu: uptime load avg {load_avg} ({cpu_percent:.1f}%)"
+        
+        return {}, "cpu: no load average found in system info"
+    except Exception as e:
+        return {}, f"cpu parse error from system info: {e}"
+    """
+    Parse management CPU from debug status - most accurate method
+    Uses: <request><s><debug><status/></debug></s></request>
+    This gives the same values as the GUI dashboard
+    """
+    out: Dict[str, float] = {}
+    try:
+        root = ET.fromstring(xml_text)
+        
+        # Look for the mp-cpu-utilization field
+        mp_cpu = root.findtext(".//mp-cpu-utilization")
+        if mp_cpu:
+            try:
+                cpu_percent = float(mp_cpu)
+                out.update({
+                    "mgmt_cpu": cpu_percent,
+                    "mgmt_cpu_debug": cpu_percent  # Keep both for compatibility
+                })
+                return out, f"cpu: debug status {cpu_percent}%"
+            except ValueError:
+                pass
+        
+        return {}, "cpu: no mp-cpu-utilization in debug status"
+    except Exception as e:
+        return {}, f"cpu parse error from debug status: {e}"
+
 def parse_cpu_from_top(xml_text: str) -> Tuple[Dict[str, float], str]:
-    """Parse management CPU from top CDATA"""
+    """
+    Parse management CPU from top CDATA (fallback method)
+    Enhanced version with better regex patterns
+    """
     out: Dict[str, float] = {}
     try:
         root = ET.fromstring(xml_text)
@@ -127,23 +234,35 @@ def parse_cpu_from_top(xml_text: str) -> Tuple[Dict[str, float], str]:
         if not raw:
             return {}, "cpu: no result text"
         
-        text = raw.replace("\r", "").replace("\n", " ")
-        m = re.search(
-            r"%?Cpu\(s\)[^0-9]*([0-9.]+)\s*us[, ]+\s*([0-9.]+)\s*sy[, ]+.*?([0-9.]+)\s*id",
-            text, re.IGNORECASE
-        )
-        if m:
-            usr, sy, idle = map(float, m.groups())
-            out.update({
-                "cpu_user": usr,
-                "cpu_system": sy,
-                "cpu_idle": idle,
-                "mgmt_cpu": usr + sy
-            })
-            return out, "cpu: parsed top"
-        return {}, "cpu: pattern not found"
+        # Clean up the text
+        text = raw.replace("\r", "").replace("\n", " ").replace("\t", " ")
+        
+        # Multiple regex patterns to handle different top output formats
+        patterns = [
+            # Standard format: %Cpu(s): 51.9%us, 5.4%sy, 1.0%ni, 41.6%id, 0.1%wa, 0.0%hi, 0.0%si, 0.0%st
+            r"%?Cpu\(s\)[^0-9]*([0-9.]+)%?\s*us[, ]+\s*([0-9.]+)%?\s*sy[, ]+.*?([0-9.]+)%?\s*id",
+            # Alternative format without %: Cpu(s): 51.9 us, 5.4 sy, 1.0 ni, 41.6 id
+            r"Cpu\(s\):\s*([0-9.]+)\s*us[, ]+\s*([0-9.]+)\s*sy[, ]+.*?([0-9.]+)\s*id",
+            # Compact format: CPU: 51.9us 5.4sy 41.6id
+            r"CPU:\s*([0-9.]+)us\s*([0-9.]+)sy\s*([0-9.]+)id",
+        ]
+        
+        for i, pattern in enumerate(patterns):
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                usr, sy, idle = map(float, match.groups())
+                mgmt_cpu = usr + sy
+                out.update({
+                    "cpu_user": usr,
+                    "cpu_system": sy,
+                    "cpu_idle": idle,
+                    "mgmt_cpu": mgmt_cpu
+                })
+                return out, f"cpu: fallback top pattern {i+1} - {mgmt_cpu}%"
+        
+        return {}, "cpu: no patterns matched in fallback top"
     except Exception as e:
-        return {}, f"cpu parse error: {e}"
+        return {}, f"cpu fallback top parse error: {e}"
 
 def parse_dp_cpu_from_rm(xml_text: str) -> Tuple[Dict[str, float], str]:
     """Parse data plane CPU from resource monitor - collect all aggregation methods"""
@@ -276,9 +395,14 @@ class FirewallCollector:
         return success
     
     def _save_raw_xml(self, name: str, content: str):
-        """Save raw XML response for debugging"""
+        """Save raw XML response for debugging - only save successful responses"""
         # Check global config for save_raw_xml setting
         if not self.global_config or not getattr(self.global_config, 'save_raw_xml', False):
+            return
+        
+        # Don't save error responses
+        if content and ('status="error"' in content or 'code="17"' in content):
+            LOG.debug(f"{self.name}: Skipping save of error response for {name}")
             return
             
         ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -288,6 +412,46 @@ class FirewallCollector:
             LOG.debug(f"Saved raw XML to {file_path}")
         except Exception as e:
             LOG.warning(f"Failed to save XML for {self.name}: {e}")
+    
+    def collect_management_cpu_enhanced(self) -> Dict[str, float]:
+        """
+        Collect Management CPU using enhanced method with fallback
+        Priority: debug status > enhanced top
+        """
+        cpu_metrics = {}
+        
+        # Method 1: Debug status (most accurate - matches GUI)
+        try:
+            xml = self.client.request("<request><s><debug><status/></debug></s></request>")
+            if xml:
+                self._save_raw_xml("debug_status", xml)
+                metrics, msg = parse_cpu_from_debug_status(xml)
+                if metrics:
+                    cpu_metrics.update(metrics)
+                    LOG.debug(f"{self.name}: {msg}")
+                    return cpu_metrics  # Return immediately if successful
+            else:
+                LOG.debug(f"{self.name}: Debug status failed: {self.client.last_error}")
+        except Exception as e:
+            LOG.debug(f"{self.name}: Debug status CPU failed: {e}")
+        
+        # Method 2: Enhanced top command (fallback)
+        try:
+            xml = self.client.op("<show><system><resources/></system></show>")
+            if xml:
+                self._save_raw_xml("system_resources", xml)
+                metrics, msg = parse_cpu_from_top(xml)
+                if metrics:
+                    cpu_metrics.update(metrics)
+                    LOG.debug(f"{self.name}: {msg}")
+                    return cpu_metrics
+            else:
+                LOG.warning(f"{self.name}: Failed to get system resources: {self.client.last_error}")
+        except Exception as e:
+            LOG.warning(f"{self.name}: System resources error: {e}")
+        
+        LOG.warning(f"{self.name}: All CPU monitoring methods failed")
+        return {}
     
     def collect_metrics(self) -> CollectionResult:
         """Collect metrics from this firewall"""
@@ -303,18 +467,9 @@ class FirewallCollector:
         timestamp = datetime.now(timezone.utc)
         self.poll_count += 1
         
-        # Management CPU
-        try:
-            xml = self.client.op("<show><system><resources/></system></show>")
-            if xml:
-                self._save_raw_xml("system_resources", xml)
-                d, msg = parse_cpu_from_top(xml)
-                metrics.update(d)
-                LOG.debug(f"{self.name}: {msg}")
-            else:
-                LOG.warning(f"{self.name}: Failed to get system resources: {self.client.last_error}")
-        except Exception as e:
-            LOG.warning(f"{self.name}: System resources error: {e}")
+        # Enhanced Management CPU collection
+        cpu_metrics = self.collect_management_cpu_enhanced()
+        metrics.update(cpu_metrics)
         
         # Data plane CPU and packet buffer
         try:

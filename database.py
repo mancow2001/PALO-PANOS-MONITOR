@@ -16,8 +16,7 @@ LOG = logging.getLogger("panos_monitor.database")
 
 def parse_iso_datetime(timestamp_str: str) -> datetime:
     """
-    Parse ISO datetime string - compatible with Python 3.6+
-    Handles various ISO format variations
+    Parse ISO datetime string - simplified and more robust version
     """
     if not timestamp_str:
         return datetime.now(timezone.utc)
@@ -26,89 +25,74 @@ def parse_iso_datetime(timestamp_str: str) -> datetime:
     if timestamp_str.endswith('Z'):
         timestamp_str = timestamp_str[:-1] + '+00:00'
     
-    # Try different parsing approaches for Python 3.6 compatibility
-    patterns = [
-        # With timezone
-        r'(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})\.?(\d{0,6})?([+-]\d{2}:\d{2})',
-        # Without timezone (assume UTC)
-        r'(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})\.?(\d{0,6})?$',
-        # Date only
-        r'(\d{4}-\d{2}-\d{2})$'
-    ]
+    try:
+        # First, try the built-in fromisoformat (Python 3.7+)
+        return datetime.fromisoformat(timestamp_str)
+    except (ValueError, AttributeError):
+        pass
     
-    for pattern in patterns:
-        match = re.match(pattern, timestamp_str)
-        if match:
-            try:
-                if len(match.groups()) == 3 and match.group(3):
-                    # Has timezone
-                    dt_part = match.group(1)
-                    microseconds = (match.group(2) or '').ljust(6, '0')[:6]
-                    tz_part = match.group(3)
-                    
-                    # Parse base datetime
-                    dt = datetime.strptime(dt_part, '%Y-%m-%dT%H:%M:%S')
-                    
-                    # Add microseconds if present
-                    if microseconds:
-                        dt = dt.replace(microsecond=int(microseconds))
-                    
-                    # Parse timezone
-                    if tz_part == '+00:00' or tz_part == '-00:00':
-                        dt = dt.replace(tzinfo=timezone.utc)
-                    else:
-                        # Parse offset
-                        sign = 1 if tz_part[0] == '+' else -1
-                        hours, minutes = map(int, tz_part[1:].split(':'))
-                        offset = timedelta(hours=sign*hours, minutes=sign*minutes)
-                        tz = timezone(offset)
-                        dt = dt.replace(tzinfo=tz)
-                    
-                    return dt
-                    
-                elif len(match.groups()) >= 2:
-                    # No timezone, assume UTC
-                    dt_part = match.group(1)
-                    microseconds = (match.group(2) or '').ljust(6, '0')[:6] if len(match.groups()) > 1 else ''
-                    
-                    if 'T' in dt_part:
-                        dt = datetime.strptime(dt_part, '%Y-%m-%dT%H:%M:%S')
-                    else:
-                        dt = datetime.strptime(dt_part, '%Y-%m-%d')
-                    
-                    # Add microseconds if present
-                    if microseconds:
-                        dt = dt.replace(microsecond=int(microseconds))
-                    
-                    # Assume UTC if no timezone specified
-                    dt = dt.replace(tzinfo=timezone.utc)
-                    return dt
-                    
-            except ValueError as e:
-                LOG.warning(f"Failed to parse datetime with pattern {pattern}: {e}")
-                continue
+    try:
+        # Handle space instead of 'T' separator
+        if ' ' in timestamp_str and 'T' not in timestamp_str:
+            timestamp_str = timestamp_str.replace(' ', 'T', 1)
+        
+        # Try again with T separator
+        return datetime.fromisoformat(timestamp_str)
+    except ValueError:
+        pass
     
-    # Fallback: try simple formats
-    simple_formats = [
-        '%Y-%m-%dT%H:%M:%S.%fZ',
-        '%Y-%m-%dT%H:%M:%SZ',
-        '%Y-%m-%dT%H:%M:%S.%f',
-        '%Y-%m-%dT%H:%M:%S',
-        '%Y-%m-%d %H:%M:%S',
-        '%Y-%m-%d'
-    ]
-    
-    for fmt in simple_formats:
-        try:
-            dt = datetime.strptime(timestamp_str.replace('Z', ''), fmt.replace('Z', ''))
-            # Assume UTC if no timezone info
+    # Try manual parsing for edge cases
+    try:
+        # Remove timezone for strptime, then add it back
+        if '+' in timestamp_str:
+            dt_part, tz_part = timestamp_str.rsplit('+', 1)
+            sign = 1
+        elif timestamp_str.count('-') > 2:  # Has timezone
+            dt_part, tz_part = timestamp_str.rsplit('-', 1)
+            sign = -1
+        else:
+            # No timezone, assume UTC
+            dt = datetime.strptime(timestamp_str.replace('T', ' '), '%Y-%m-%d %H:%M:%S.%f')
             return dt.replace(tzinfo=timezone.utc)
+        
+        # Parse the datetime part
+        try:
+            dt = datetime.strptime(dt_part.replace('T', ' '), '%Y-%m-%d %H:%M:%S.%f')
         except ValueError:
-            continue
+            dt = datetime.strptime(dt_part.replace('T', ' '), '%Y-%m-%d %H:%M:%S')
+        
+        # Parse timezone
+        if ':' in tz_part:
+            hours, minutes = map(int, tz_part.split(':'))
+        else:
+            hours = int(tz_part[:2])
+            minutes = int(tz_part[2:]) if len(tz_part) > 2 else 0
+        
+        offset = timedelta(hours=sign*hours, minutes=sign*minutes)
+        tz = timezone(offset)
+        return dt.replace(tzinfo=tz)
+        
+    except Exception as e:
+        LOG.debug(f"Manual parsing failed for '{timestamp_str}': {e}")
+        
+        # Last resort: try common formats without timezone, assume UTC
+        formats = [
+            '%Y-%m-%d %H:%M:%S.%f',
+            '%Y-%m-%d %H:%M:%S',
+            '%Y-%m-%dT%H:%M:%S.%f',
+            '%Y-%m-%dT%H:%M:%S',
+            '%Y-%m-%d'
+        ]
+        
+        for fmt in formats:
+            try:
+                dt = datetime.strptime(timestamp_str.split('+')[0].split('Z')[0], fmt)
+                return dt.replace(tzinfo=timezone.utc)
+            except ValueError:
+                continue
     
     LOG.warning(f"Could not parse timestamp '{timestamp_str}', using current time")
     return datetime.now(timezone.utc)
-
 class MetricsDatabase:
     """SQLite database for storing firewall metrics"""
     
