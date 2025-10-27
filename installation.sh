@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# PAN-OS Multi-Firewall Monitor - Installation Script
+# PAN-OS Multi-Firewall Monitor - Installation Script (Fixed for Ubuntu 22.04+)
 # Supports Red Hat/CentOS/Rocky/AlmaLinux and Ubuntu/Debian systems
 # Creates daemon service running under dedicated non-root user
 #
@@ -114,7 +114,15 @@ detect_os() {
     elif [[ -f /etc/debian_version ]]; then
         OS="debian"
         PKG_MGR="apt"
-        print_info "Detected Debian-based system using apt"
+        
+        # Detect Ubuntu version for PEP 668 handling
+        if command -v lsb_release >/dev/null 2>&1; then
+            UBUNTU_VERSION=$(lsb_release -rs 2>/dev/null || echo "unknown")
+            print_info "Detected Debian-based system (Ubuntu $UBUNTU_VERSION) using apt"
+        else
+            UBUNTU_VERSION="unknown"
+            print_info "Detected Debian-based system using apt"
+        fi
     else
         print_error "Unsupported operating system"
         print_info "This script supports Red Hat/CentOS/Rocky/AlmaLinux and Ubuntu/Debian"
@@ -185,7 +193,7 @@ enable_repositories() {
     fi
 }
 
-# Install system dependencies with RHEL-specific packages
+# Install system dependencies with RHEL-specific packages and PEP 668 compliance
 install_system_deps() {
     print_info "Installing system dependencies..."
     
@@ -222,9 +230,19 @@ install_system_deps() {
         
     elif [[ "$OS" == "debian" ]]; then
         apt update
-        apt install -y python3 python3-pip python3-venv python3-dev \
-                       build-essential libssl-dev libffi-dev \
-                       libsqlite3-dev systemd curl wget
+        
+        # Install basic packages including python3-full for newer Ubuntu
+        if [[ "$UBUNTU_VERSION" != "unknown" ]] && dpkg --compare-versions "$UBUNTU_VERSION" "ge" "22.04"; then
+            print_info "Installing packages for Ubuntu 22.04+ (PEP 668 compliant)"
+            apt install -y python3 python3-pip python3-venv python3-dev python3-full \
+                           build-essential libssl-dev libffi-dev \
+                           libsqlite3-dev systemd curl wget
+        else
+            # Older Ubuntu/Debian versions
+            apt install -y python3 python3-pip python3-venv python3-dev \
+                           build-essential libssl-dev libffi-dev \
+                           libsqlite3-dev systemd curl wget
+        fi
     fi
     
     # Verify Python 3 installation
@@ -233,18 +251,18 @@ install_system_deps() {
         exit 1
     fi
     
-    # Verify pip3 installation
-    if ! command -v pip3 >/dev/null 2>&1; then
-        print_warning "pip3 not found, attempting to install via get-pip.py..."
-        curl -sS https://bootstrap.pypa.io/get-pip.py | python3
-    fi
-    
-    # Upgrade pip to latest version
-    python3 -m pip install --upgrade pip
+    # Don't upgrade pip globally due to PEP 668 - this will be handled in venv
+    print_info "Skipping global pip upgrade (will be handled in virtual environment)"
     
     print_success "System dependencies installed"
     print_info "Python version: $(python3 --version)"
-    print_info "Pip version: $(python3 -m pip --version)"
+    
+    # Test venv capability
+    if python3 -m venv --help >/dev/null 2>&1; then
+        print_success "Python venv module is available"
+    else
+        print_error "Python venv module not available - installation may fail"
+    fi
 }
 
 # Create service user and group
@@ -289,7 +307,7 @@ create_directories() {
     print_success "Directory structure created"
 }
 
-# Create Python virtual environment with better error handling
+# Create Python virtual environment with better error handling and PEP 668 compliance
 create_venv() {
     print_info "Creating Python virtual environment..."
     
@@ -302,19 +320,36 @@ create_venv() {
             $PKG_MGR install -y python3-venv || {
                 print_error "Failed to install python3-venv package"
                 print_info "Trying alternative: virtualenv"
-                python3 -m pip install virtualenv
-                if [[ -n "$ELEVATION_CMD" ]]; then
-                    $ELEVATION_CMD -u "$SERVICE_USER" python3 -m virtualenv "$VENV_DIR"
+                # Install virtualenv to system first, then use it
+                if [[ "$RHEL_VERSION" == "7" ]]; then
+                    # On RHEL 7, we might need to use the older method
+                    python3 -m pip install --user virtualenv
+                    if [[ -n "$ELEVATION_CMD" ]]; then
+                        $ELEVATION_CMD -u "$SERVICE_USER" python3 -m virtualenv "$VENV_DIR"
+                    else
+                        su - "$SERVICE_USER" -s /bin/bash -c "python3 -m virtualenv '$VENV_DIR'"
+                    fi
                 else
-                    su - "$SERVICE_USER" -s /bin/bash -c "python3 -m virtualenv '$VENV_DIR'"
+                    # For newer RHEL, try package manager first
+                    $PKG_MGR install -y python3-virtualenv || python3 -m pip install --user virtualenv
+                    if [[ -n "$ELEVATION_CMD" ]]; then
+                        $ELEVATION_CMD -u "$SERVICE_USER" python3 -m virtualenv "$VENV_DIR"
+                    else
+                        su - "$SERVICE_USER" -s /bin/bash -c "python3 -m virtualenv '$VENV_DIR'"
+                    fi
                 fi
                 print_success "Virtual environment created using virtualenv"
                 return
             }
+        elif [[ "$OS" == "debian" ]]; then
+            # For Ubuntu/Debian, python3-venv should already be installed
+            print_error "python3-venv should be available on Debian-based systems"
+            exit 1
         fi
     fi
     
     # Create virtual environment as service user
+    print_info "Creating virtual environment using python3 -m venv..."
     if [[ -n "$ELEVATION_CMD" ]]; then
         $ELEVATION_CMD -u "$SERVICE_USER" python3 -m venv "$VENV_DIR"
     else
@@ -327,15 +362,17 @@ create_venv() {
         exit 1
     fi
     
-    # Upgrade pip in virtual environment
+    # Upgrade pip in virtual environment (this is safe and recommended)
+    print_info "Upgrading pip in virtual environment..."
     if [[ -n "$ELEVATION_CMD" ]]; then
         $ELEVATION_CMD -u "$SERVICE_USER" "$VENV_DIR/bin/python" -m pip install --upgrade pip
     else
         su - "$SERVICE_USER" -s /bin/bash -c "'$VENV_DIR/bin/python' -m pip install --upgrade pip"
     fi
     
-    print_success "Virtual environment created"
+    print_success "Virtual environment created and pip upgraded"
     print_info "Virtual env Python: $("$VENV_DIR/bin/python" --version)"
+    print_info "Virtual env pip: $("$VENV_DIR/bin/pip" --version)"
 }
 
 # Install Python dependencies with better error handling
@@ -369,46 +406,70 @@ EOF
     print_info "Installing Python packages (this may take a few minutes)..."
     
     # First, install wheel to help with compilation
+    print_info "Installing wheel..."
     if [[ -n "$ELEVATION_CMD" ]]; then
         $ELEVATION_CMD -u "$SERVICE_USER" "$VENV_DIR/bin/pip" install wheel
     else
         su - "$SERVICE_USER" -s /bin/bash -c "'$VENV_DIR/bin/pip' install wheel"
     fi
     
-    # Install dependencies one by one with better error handling
-    while IFS= read -r requirement; do
-        if [[ -n "$requirement" ]] && [[ ! "$requirement" =~ ^#.* ]]; then
-            print_info "Installing: $requirement"
-            if [[ -n "$ELEVATION_CMD" ]]; then
-                if ! $ELEVATION_CMD -u "$SERVICE_USER" "$VENV_DIR/bin/pip" install "$requirement"; then
-                    print_warning "Failed to install $requirement, but continuing..."
+    # Install all dependencies at once (faster and handles dependencies better)
+    print_info "Installing all requirements..."
+    if [[ -n "$ELEVATION_CMD" ]]; then
+        if ! $ELEVATION_CMD -u "$SERVICE_USER" "$VENV_DIR/bin/pip" install -r "$INSTALL_DIR/requirements.txt"; then
+            print_warning "Bulk installation failed, trying individual packages..."
+            # Fall back to individual installation
+            while IFS= read -r requirement; do
+                if [[ -n "$requirement" ]] && [[ ! "$requirement" =~ ^#.* ]]; then
+                    print_info "Installing: $requirement"
+                    if ! $ELEVATION_CMD -u "$SERVICE_USER" "$VENV_DIR/bin/pip" install "$requirement"; then
+                        print_warning "Failed to install $requirement, but continuing..."
+                    fi
                 fi
-            else
-                if ! su - "$SERVICE_USER" -s /bin/bash -c "'$VENV_DIR/bin/pip' install '$requirement'"; then
-                    print_warning "Failed to install $requirement, but continuing..."
-                fi
-            fi
+            done < "$INSTALL_DIR/requirements.txt"
         fi
-    done < "$INSTALL_DIR/requirements.txt"
+    else
+        if ! su - "$SERVICE_USER" -s /bin/bash -c "'$VENV_DIR/bin/pip' install -r '$INSTALL_DIR/requirements.txt'"; then
+            print_warning "Bulk installation failed, trying individual packages..."
+            # Fall back to individual installation
+            while IFS= read -r requirement; do
+                if [[ -n "$requirement" ]] && [[ ! "$requirement" =~ ^#.* ]]; then
+                    print_info "Installing: $requirement"
+                    if ! su - "$SERVICE_USER" -s /bin/bash -c "'$VENV_DIR/bin/pip' install '$requirement'"; then
+                        print_warning "Failed to install $requirement, but continuing..."
+                    fi
+                fi
+            done < "$INSTALL_DIR/requirements.txt"
+        fi
+    fi
     
     # Verify key packages are installed
     print_info "Verifying installation..."
     key_packages=("requests" "yaml" "pandas" "fastapi" "uvicorn")
+    failed_packages=()
+    
     for package in "${key_packages[@]}"; do
         if [[ -n "$ELEVATION_CMD" ]]; then
             if $ELEVATION_CMD -u "$SERVICE_USER" "$VENV_DIR/bin/python" -c "import $package" 2>/dev/null; then
                 print_success "$package: OK"
             else
                 print_warning "$package: Failed to import"
+                failed_packages+=("$package")
             fi
         else
             if su - "$SERVICE_USER" -s /bin/bash -c "'$VENV_DIR/bin/python' -c 'import $package'" 2>/dev/null; then
                 print_success "$package: OK"
             else
                 print_warning "$package: Failed to import"
+                failed_packages+=("$package")
             fi
         fi
     done
+    
+    if [[ ${#failed_packages[@]} -gt 0 ]]; then
+        print_warning "Some packages failed to install: ${failed_packages[*]}"
+        print_info "The application may still work with reduced functionality"
+    fi
     
     print_success "Python dependencies installation completed"
 }
@@ -498,7 +559,7 @@ firewalls:
     password: "your_password_here"
     verify_ssl: false
     enabled: false  # Set to true after configuring
-    poll_interval: 60
+    poll_interval: 30  # Recommended: 15-30 seconds for throughput
 
 # Add more firewalls as needed:
 #  production_fw:
@@ -516,6 +577,7 @@ EOF
     
     print_success "Configuration file created at $CONFIG_DIR/config.yaml"
     print_warning "Please edit $CONFIG_DIR/config.yaml to configure your firewalls"
+    print_info "Recommended poll_interval: 15-30 seconds for capturing traffic bursts"
 }
 
 # Create systemd service with proper PATH
@@ -620,6 +682,10 @@ journalctl -u $SERVICE_NAME --no-pager -n 20
 echo
 echo "=== Web Dashboard ==="
 echo "Access the dashboard at: http://\$(hostname -I | awk '{print \$1}'):8080"
+echo
+echo "=== Performance Tips ==="
+echo "For best throughput monitoring, use poll_interval: 15-30 seconds"
+echo "Current config: $CONFIG_DIR/config.yaml"
 EOF
     
     # Control script
@@ -677,17 +743,27 @@ case "\$1" in
             exit 1
         fi
         ;;
+    test-connection)
+        echo "Testing firewall connections..."
+        if [[ -n "\$ELEVATION_CMD" ]]; then
+            \$ELEVATION_CMD -u $SERVICE_USER $VENV_DIR/bin/python $INSTALL_DIR/main.py --test-config $CONFIG_DIR/config.yaml
+        else
+            echo "Error: Elevation command required"
+            exit 1
+        fi
+        ;;
     *)
-        echo "Usage: \$0 {start|stop|restart|status|logs|config|install-deps}"
+        echo "Usage: \$0 {start|stop|restart|status|logs|config|install-deps|test-connection}"
         echo
         echo "Commands:"
-        echo "  start        Start the service"
-        echo "  stop         Stop the service"
-        echo "  restart      Restart the service"
-        echo "  status       Show service status and recent logs"
-        echo "  logs         Follow service logs in real-time"
-        echo "  config       Edit configuration file"
-        echo "  install-deps Reinstall Python dependencies"
+        echo "  start           Start the service"
+        echo "  stop            Stop the service"
+        echo "  restart         Restart the service"
+        echo "  status          Show service status and recent logs"
+        echo "  logs            Follow service logs in real-time"
+        echo "  config          Edit configuration file"
+        echo "  install-deps    Reinstall Python dependencies"
+        echo "  test-connection Test firewall connections"
         exit 1
         ;;
 esac
@@ -733,9 +809,12 @@ install() {
     print_info "Next steps:"
     echo "  1. Edit configuration: $CONFIG_DIR/config.yaml"
     echo "  2. Configure your firewalls and set enabled: true"
-    echo "  3. Start the service: systemctl start $SERVICE_NAME"
-    echo "  4. Check status: ${SERVICE_NAME}-status"
-    echo "  5. Access dashboard: http://$(hostname -I | awk '{print $1}'):8080"
+    echo "  3. For optimal throughput monitoring, use poll_interval: 15-30 seconds"
+    echo "  4. Start the service: systemctl start $SERVICE_NAME"
+    echo "  5. Check status: ${SERVICE_NAME}-status"
+    echo "  6. Access dashboard: http://$(hostname -I | awk '{print $1}'):8080"
+    echo
+    print_warning "IMPORTANT: Use poll_interval of 15-30 seconds to avoid missing traffic bursts!"
     echo
     print_info "Installed files:"
     echo "  - Application: $INSTALL_DIR"
@@ -872,6 +951,11 @@ test_installation() {
     fi
     
     print_success "Installation test passed"
+    print_info "Virtual environment pip packages:"
+    if [[ -n "$ELEVATION_CMD" ]]; then
+        $ELEVATION_CMD -u "$SERVICE_USER" "$VENV_DIR/bin/pip" list | head -10
+    fi
+    
     return 0
 }
 
@@ -897,6 +981,7 @@ main() {
             echo "  Run with sudo:  sudo $0"
             echo "  Run with dzdo:  dzdo $0"
             echo
+            echo "This version fixes PEP 668 compliance issues on Ubuntu 22.04+"
             ;;
         "")
             install

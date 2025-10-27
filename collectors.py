@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Data collection modules for PAN-OS Multi-Firewall Monitor
-Updated with enhanced Management CPU detection using debug status method
+Enhanced with per-second session info sampling for accurate throughput measurement
 """
 import time
 import logging
@@ -12,9 +12,10 @@ import os
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Dict, Optional, Tuple, List, Any
-from threading import Thread, Event
+from threading import Thread, Event, Lock
 from queue import Queue
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+import statistics
 
 import requests
 from requests.exceptions import RequestException
@@ -33,6 +34,32 @@ class CollectionResult:
     metrics: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
     timestamp: Optional[datetime] = None
+
+@dataclass
+class SessionInfoSample:
+    """Single session info sample with timestamp"""
+    timestamp: datetime
+    kbps: float
+    pps: float
+    success: bool
+    error: Optional[str] = None
+
+@dataclass
+class SessionInfoAggregates:
+    """Aggregated session info over sampling period"""
+    sample_count: int = 0
+    kbps_samples: List[float] = field(default_factory=list)
+    pps_samples: List[float] = field(default_factory=list)
+    kbps_mean: float = 0.0
+    kbps_max: float = 0.0
+    kbps_min: float = 0.0
+    kbps_p95: float = 0.0
+    pps_mean: float = 0.0
+    pps_max: float = 0.0
+    pps_min: float = 0.0
+    pps_p95: float = 0.0
+    sampling_period: float = 0.0
+    success_rate: float = 0.0
 
 class PanOSClient:
     """PAN-OS API client for a single firewall"""
@@ -74,7 +101,7 @@ class PanOSClient:
             self.last_error = f"Keygen parse error: {e}"
             return False
 
-    def op(self, xml_cmd: str) -> Optional[str]:
+    def op(self, xml_cmd: str, timeout: int = 30) -> Optional[str]:
         """Execute operational command and return XML response"""
         if not self.api_key:
             self.last_error = "API key not set; call keygen() first"
@@ -84,7 +111,7 @@ class PanOSClient:
         params = {"type": "op", "cmd": xml_cmd, "key": self.api_key}
         
         try:
-            resp = self.session.get(url, params=params, timeout=30)
+            resp = self.session.get(url, params=params, timeout=timeout)
             resp.raise_for_status()
             self.last_error = None
             return resp.text
@@ -95,6 +122,10 @@ class PanOSClient:
         except Exception as e:
             self.last_error = f"Unexpected error: {e}"
             return None
+
+    def op_fast(self, xml_cmd: str) -> Optional[str]:
+        """Execute operational command with shorter timeout for frequent polling"""
+        return self.op(xml_cmd, timeout=5)
 
     def request(self, xml_cmd: str) -> Optional[str]:
         """Execute request command and return XML response"""
@@ -134,12 +165,41 @@ def _aggregate(values: List[float], mode: str = "mean") -> float:
     mode = (mode or "mean").lower()
     if mode == "max":
         return max(values)
+    if mode == "min":
+        return min(values)
     if mode == "p95":
         import math
         s = sorted(values)
         idx = max(0, min(len(s)-1, math.ceil(0.95*len(s))-1))
         return s[idx]
     return sum(values) / len(values)
+
+def parse_cpu_from_debug_status(xml_text: str) -> Tuple[Dict[str, float], str]:
+    """
+    Parse management CPU from debug status - most accurate method
+    Uses: <request><s><debug><status/></debug></s></request>
+    This gives the same values as the GUI dashboard
+    """
+    out: Dict[str, float] = {}
+    try:
+        root = ET.fromstring(xml_text)
+        
+        # Look for the mp-cpu-utilization field
+        mp_cpu = root.findtext(".//mp-cpu-utilization")
+        if mp_cpu:
+            try:
+                cpu_percent = float(mp_cpu)
+                out.update({
+                    "mgmt_cpu": cpu_percent,
+                    "mgmt_cpu_debug": cpu_percent  # Keep both for compatibility
+                })
+                return out, f"cpu: debug status {cpu_percent}%"
+            except ValueError:
+                pass
+        
+        return {}, "cpu: no mp-cpu-utilization in debug status"
+    except Exception as e:
+        return {}, f"cpu parse error from debug status: {e}"
 
 def parse_cpu_from_system_info(xml_text: str) -> Tuple[Dict[str, float], str]:
     """
@@ -196,31 +256,6 @@ def parse_cpu_from_system_info(xml_text: str) -> Tuple[Dict[str, float], str]:
         return {}, "cpu: no load average found in system info"
     except Exception as e:
         return {}, f"cpu parse error from system info: {e}"
-    """
-    Parse management CPU from debug status - most accurate method
-    Uses: <request><s><debug><status/></debug></s></request>
-    This gives the same values as the GUI dashboard
-    """
-    out: Dict[str, float] = {}
-    try:
-        root = ET.fromstring(xml_text)
-        
-        # Look for the mp-cpu-utilization field
-        mp_cpu = root.findtext(".//mp-cpu-utilization")
-        if mp_cpu:
-            try:
-                cpu_percent = float(mp_cpu)
-                out.update({
-                    "mgmt_cpu": cpu_percent,
-                    "mgmt_cpu_debug": cpu_percent  # Keep both for compatibility
-                })
-                return out, f"cpu: debug status {cpu_percent}%"
-            except ValueError:
-                pass
-        
-        return {}, "cpu: no mp-cpu-utilization in debug status"
-    except Exception as e:
-        return {}, f"cpu parse error from debug status: {e}"
 
 def parse_cpu_from_top(xml_text: str) -> Tuple[Dict[str, float], str]:
     """
@@ -324,7 +359,7 @@ def parse_pbuf_live_from_rm(xml_text: str) -> Tuple[Dict[str, float], str]:
         return {}, f"pbuf parse error: {e}"
 
 def parse_throughput_from_session_info(xml_text: str) -> Tuple[Dict[str, float], str]:
-    """Parse throughput and PPS from session info"""
+    """Parse throughput and PPS from session info - single sample"""
     out: Dict[str, float] = {}
     try:
         root = ET.fromstring(xml_text)
@@ -333,19 +368,59 @@ def parse_throughput_from_session_info(xml_text: str) -> Tuple[Dict[str, float],
         
         if kbps is not None:
             try:
-                out["throughput_mbps_total"] = float(kbps) / 1000.0
+                out["kbps"] = float(kbps)
+                out["throughput_mbps"] = float(kbps) / 1000.0
             except ValueError:
                 pass
                 
         if pps is not None:
             try:
-                out["pps_total"] = float(pps)
+                out["pps"] = float(pps)
             except ValueError:
                 pass
                 
         return out, "throughput: parsed session info"
     except Exception as e:
         return {}, f"throughput parse error: {e}"
+
+def aggregate_session_info_samples(samples: List[SessionInfoSample]) -> SessionInfoAggregates:
+    """Aggregate per-second session info samples into statistics"""
+    if not samples:
+        return SessionInfoAggregates()
+    
+    successful_samples = [s for s in samples if s.success]
+    
+    if not successful_samples:
+        return SessionInfoAggregates(
+            sample_count=len(samples),
+            success_rate=0.0,
+            sampling_period=(samples[-1].timestamp - samples[0].timestamp).total_seconds()
+        )
+    
+    kbps_values = [s.kbps for s in successful_samples]
+    pps_values = [s.pps for s in successful_samples]
+    
+    aggregates = SessionInfoAggregates(
+        sample_count=len(samples),
+        kbps_samples=kbps_values,
+        pps_samples=pps_values,
+        success_rate=len(successful_samples) / len(samples),
+        sampling_period=(samples[-1].timestamp - samples[0].timestamp).total_seconds()
+    )
+    
+    if kbps_values:
+        aggregates.kbps_mean = statistics.mean(kbps_values)
+        aggregates.kbps_max = max(kbps_values)
+        aggregates.kbps_min = min(kbps_values)
+        aggregates.kbps_p95 = statistics.quantiles(kbps_values, n=20)[18] if len(kbps_values) >= 20 else max(kbps_values)
+    
+    if pps_values:
+        aggregates.pps_mean = statistics.mean(pps_values)
+        aggregates.pps_max = max(pps_values)
+        aggregates.pps_min = min(pps_values)
+        aggregates.pps_p95 = statistics.quantiles(pps_values, n=20)[18] if len(pps_values) >= 20 else max(pps_values)
+    
+    return aggregates
 
 def cleanup_old_xml_files(xml_dir: Path, retention_hours: int):
     """Remove XML files older than retention_hours"""
@@ -369,13 +444,109 @@ def cleanup_old_xml_files(xml_dir: Path, retention_hours: int):
     if removed_count > 0:
         LOG.info(f"Cleaned up {removed_count} old XML files (older than {retention_hours}h)")
 
+class SessionInfoSampler:
+    """Per-second session info sampler for a single firewall"""
+    
+    def __init__(self, name: str, client: PanOSClient):
+        self.name = name
+        self.client = client
+        self.running = False
+        self.samples: List[SessionInfoSample] = []
+        self.samples_lock = Lock()
+        self.thread: Optional[Thread] = None
+        self.stop_event = Event()
+        
+    def start_sampling(self):
+        """Start per-second sampling"""
+        if self.running:
+            return
+        
+        self.running = True
+        self.stop_event.clear()
+        self.thread = Thread(
+            target=self._sampling_worker,
+            daemon=True,
+            name=f"session-sampler-{self.name}"
+        )
+        self.thread.start()
+        LOG.debug(f"{self.name}: Started session info sampling")
+    
+    def stop_sampling(self):
+        """Stop per-second sampling"""
+        if not self.running:
+            return
+        
+        self.running = False
+        self.stop_event.set()
+        if self.thread and self.thread.is_alive():
+            self.thread.join(timeout=2)
+        LOG.debug(f"{self.name}: Stopped session info sampling")
+    
+    def _sampling_worker(self):
+        """Worker thread for per-second session info sampling"""
+        while not self.stop_event.is_set():
+            start_time = time.time()
+            timestamp = datetime.now(timezone.utc)
+            
+            # Sample session info
+            xml = self.client.op_fast("<show><session><info/></session></show>")
+            
+            if xml:
+                metrics, msg = parse_throughput_from_session_info(xml)
+                if metrics and "kbps" in metrics and "pps" in metrics:
+                    sample = SessionInfoSample(
+                        timestamp=timestamp,
+                        kbps=metrics["kbps"],
+                        pps=metrics["pps"],
+                        success=True
+                    )
+                else:
+                    sample = SessionInfoSample(
+                        timestamp=timestamp,
+                        kbps=0.0,
+                        pps=0.0,
+                        success=False,
+                        error="Failed to parse session info"
+                    )
+            else:
+                sample = SessionInfoSample(
+                    timestamp=timestamp,
+                    kbps=0.0,
+                    pps=0.0,
+                    success=False,
+                    error=self.client.last_error
+                )
+            
+            # Store sample with thread safety
+            with self.samples_lock:
+                self.samples.append(sample)
+                # Keep only recent samples (last 5 minutes worth)
+                cutoff_time = timestamp - timedelta(minutes=5)
+                self.samples = [s for s in self.samples if s.timestamp > cutoff_time]
+            
+            # Sleep for remaining time to maintain 1-second intervals
+            elapsed = time.time() - start_time
+            sleep_time = max(0, 1.0 - elapsed)
+            if sleep_time > 0:
+                self.stop_event.wait(sleep_time)
+    
+    def get_samples_since(self, since_time: datetime) -> List[SessionInfoSample]:
+        """Get all samples since the given time"""
+        with self.samples_lock:
+            return [s for s in self.samples if s.timestamp >= since_time]
+    
+    def clear_samples_before(self, before_time: datetime):
+        """Clear samples older than the given time"""
+        with self.samples_lock:
+            self.samples = [s for s in self.samples if s.timestamp >= before_time]
+
 class FirewallCollector:
-    """Collector for a single firewall"""
+    """Enhanced collector for a single firewall with per-second session sampling"""
     
     def __init__(self, name: str, config, output_dir: Path, global_config=None):
         self.name = name
         self.config = config
-        self.global_config = global_config  # Store global configuration
+        self.global_config = global_config
         self.client = PanOSClient(config.host, config.verify_ssl)
         self.output_dir = output_dir
         self.xml_dir = output_dir / "raw_xml" / name
@@ -384,12 +555,18 @@ class FirewallCollector:
         self.last_poll_time = None
         self.poll_count = 0
         
+        # Session info sampler
+        self.session_sampler = SessionInfoSampler(name, self.client)
+        self.last_collection_time = datetime.now(timezone.utc)
+        
     def authenticate(self) -> bool:
         """Authenticate with the firewall"""
         success = self.client.keygen(self.config.username, self.config.password)
         if success:
             self.authenticated = True
-            LOG.info(f"Successfully authenticated with {self.name}")
+            # Start session sampling after authentication
+            self.session_sampler.start_sampling()
+            LOG.info(f"Successfully authenticated with {self.name} and started session sampling")
         else:
             LOG.error(f"Failed to authenticate with {self.name}: {self.client.last_error}")
         return success
@@ -453,6 +630,53 @@ class FirewallCollector:
         LOG.warning(f"{self.name}: All CPU monitoring methods failed")
         return {}
     
+    def collect_session_info_aggregated(self) -> Dict[str, float]:
+        """Collect aggregated session info from per-second samples"""
+        current_time = datetime.now(timezone.utc)
+        
+        # Get samples since last collection
+        samples = self.session_sampler.get_samples_since(self.last_collection_time)
+        
+        if not samples:
+            LOG.warning(f"{self.name}: No session info samples available for aggregation")
+            return {}
+        
+        # Aggregate the samples
+        aggregates = aggregate_session_info_samples(samples)
+        
+        # Convert to metrics dictionary
+        metrics = {
+            # Mean values (primary metrics)
+            "throughput_mbps_total": aggregates.kbps_mean / 1000.0,
+            "pps_total": aggregates.pps_mean,
+            
+            # Additional statistics
+            "throughput_mbps_max": aggregates.kbps_max / 1000.0,
+            "throughput_mbps_min": aggregates.kbps_min / 1000.0,
+            "throughput_mbps_p95": aggregates.kbps_p95 / 1000.0,
+            "pps_max": aggregates.pps_max,
+            "pps_min": aggregates.pps_min,
+            "pps_p95": aggregates.pps_p95,
+            
+            # Sampling metadata
+            "session_sample_count": aggregates.sample_count,
+            "session_success_rate": aggregates.success_rate,
+            "session_sampling_period": aggregates.sampling_period
+        }
+        
+        # Update last collection time
+        self.last_collection_time = current_time
+        
+        # Clean up old samples
+        cutoff_time = current_time - timedelta(minutes=2)
+        self.session_sampler.clear_samples_before(cutoff_time)
+        
+        LOG.debug(f"{self.name}: Aggregated {aggregates.sample_count} session samples "
+                 f"({aggregates.success_rate:.1%} success rate, "
+                 f"{aggregates.sampling_period:.1f}s period)")
+        
+        return metrics
+    
     def collect_metrics(self) -> CollectionResult:
         """Collect metrics from this firewall"""
         if not self.authenticated:
@@ -491,18 +715,12 @@ class FirewallCollector:
         except Exception as e:
             LOG.warning(f"{self.name}: Resource monitor error: {e}")
         
-        # Throughput and PPS
+        # Aggregated session info (throughput and PPS from per-second samples)
         try:
-            xml = self.client.op("<show><session><info/></session></show>")
-            if xml:
-                self._save_raw_xml("session_info", xml)
-                d, msg = parse_throughput_from_session_info(xml)
-                metrics.update({k: v for k, v in d.items() if v is not None})
-                LOG.debug(f"{self.name}: {msg}")
-            else:
-                LOG.warning(f"{self.name}: Failed to get session info: {self.client.last_error}")
+            session_metrics = self.collect_session_info_aggregated()
+            metrics.update(session_metrics)
         except Exception as e:
-            LOG.warning(f"{self.name}: Session info error: {e}")
+            LOG.warning(f"{self.name}: Session info aggregation error: {e}")
         
         # Add timestamp and firewall name
         metrics["timestamp"] = timestamp.isoformat()
@@ -523,6 +741,10 @@ class FirewallCollector:
             metrics=metrics,
             timestamp=timestamp
         )
+    
+    def stop(self):
+        """Stop the collector and session sampler"""
+        self.session_sampler.stop_sampling()
 
 class MultiFirewallCollector:
     """Manages collection from multiple firewalls"""
@@ -531,7 +753,7 @@ class MultiFirewallCollector:
         self.firewall_configs = firewall_configs
         self.output_dir = output_dir
         self.database = database
-        self.global_config = global_config  # Store global configuration
+        self.global_config = global_config
         self.collectors: Dict[str, FirewallCollector] = {}
         self.collection_threads: Dict[str, Thread] = {}
         self.stop_events: Dict[str, Event] = {}
@@ -574,7 +796,7 @@ class MultiFirewallCollector:
         )
         self.metrics_thread.start()
         
-        LOG.info("All collection threads started")
+        LOG.info("All collection threads started with per-second session sampling")
     
     def stop_collection(self):
         """Stop all collection threads"""
@@ -583,6 +805,10 @@ class MultiFirewallCollector:
         
         LOG.info("Stopping collection threads...")
         self.running = False
+        
+        # Stop collectors (which stops session samplers)
+        for collector in self.collectors.values():
+            collector.stop()
         
         # Signal all threads to stop
         for stop_event in self.stop_events.values():
@@ -667,14 +893,25 @@ class MultiFirewallCollector:
         LOG.info("Metrics processor stopped")
     
     def get_collector_status(self) -> Dict[str, Dict[str, Any]]:
-        """Get status of all collectors"""
+        """Get status of all collectors including session sampling info"""
         status = {}
         for name, collector in self.collectors.items():
+            samples_count = 0
+            last_sample_time = None
+            
+            with collector.session_sampler.samples_lock:
+                samples_count = len(collector.session_sampler.samples)
+                if collector.session_sampler.samples:
+                    last_sample_time = collector.session_sampler.samples[-1].timestamp.isoformat()
+            
             status[name] = {
                 'authenticated': collector.authenticated,
                 'last_poll': collector.last_poll_time.isoformat() if collector.last_poll_time else None,
                 'poll_count': collector.poll_count,
                 'thread_alive': self.collection_threads.get(name, Thread()).is_alive(),
+                'session_sampler_running': collector.session_sampler.running,
+                'session_samples_count': samples_count,
+                'last_session_sample': last_sample_time,
                 'config': {
                     'host': collector.config.host,
                     'interval': collector.config.poll_interval,
@@ -692,7 +929,9 @@ class MultiFirewallCollector:
         if firewall_name not in self.collectors:
             return False
         
-        # Stop the specific thread
+        # Stop the specific collector and thread
+        self.collectors[firewall_name].stop()
+        
         if firewall_name in self.stop_events:
             self.stop_events[firewall_name].set()
         
@@ -742,7 +981,7 @@ if __name__ == "__main__":
         db
     )
     
-    print("Starting collection (this is just a test)")
+    print("Starting collection with per-second session sampling (this is just a test)")
     # collector.start_collection()
     # time.sleep(10)
     # collector.stop_collection()
