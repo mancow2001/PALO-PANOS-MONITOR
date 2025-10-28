@@ -3,6 +3,7 @@
 Database management for PAN-OS Multi-Firewall Monitor
 Provides persistent storage for metrics data using SQLite
 Enhanced with automatic schema migration for throughput and PPS statistics
+Fixed for Python 3.6 compatibility
 """
 import sqlite3
 import logging
@@ -15,9 +16,10 @@ from contextlib import contextmanager
 
 LOG = logging.getLogger("panos_monitor.database")
 
-def parse_iso_datetime(timestamp_str: str) -> datetime:
+def parse_iso_datetime_python36(timestamp_str: str) -> datetime:
     """
-    Parse ISO datetime string - simplified and more robust version
+    Parse ISO datetime string - Python 3.6 compatible version
+    Python 3.6 doesn't have datetime.fromisoformat()
     """
     if not timestamp_str:
         return datetime.now(timezone.utc)
@@ -26,23 +28,11 @@ def parse_iso_datetime(timestamp_str: str) -> datetime:
     if timestamp_str.endswith('Z'):
         timestamp_str = timestamp_str[:-1] + '+00:00'
     
-    try:
-        # First, try the built-in fromisoformat (Python 3.7+)
-        return datetime.fromisoformat(timestamp_str)
-    except (ValueError, AttributeError):
-        pass
+    # Handle space instead of 'T' separator
+    if ' ' in timestamp_str and 'T' not in timestamp_str:
+        timestamp_str = timestamp_str.replace(' ', 'T', 1)
     
-    try:
-        # Handle space instead of 'T' separator
-        if ' ' in timestamp_str and 'T' not in timestamp_str:
-            timestamp_str = timestamp_str.replace(' ', 'T', 1)
-        
-        # Try again with T separator
-        return datetime.fromisoformat(timestamp_str)
-    except ValueError:
-        pass
-    
-    # Try manual parsing for edge cases
+    # Try manual parsing for Python 3.6
     try:
         # Remove timezone for strptime, then add it back
         if '+' in timestamp_str:
@@ -53,7 +43,10 @@ def parse_iso_datetime(timestamp_str: str) -> datetime:
             sign = -1
         else:
             # No timezone, assume UTC
-            dt = datetime.strptime(timestamp_str.replace('T', ' '), '%Y-%m-%d %H:%M:%S.%f')
+            try:
+                dt = datetime.strptime(timestamp_str.replace('T', ' '), '%Y-%m-%d %H:%M:%S.%f')
+            except ValueError:
+                dt = datetime.strptime(timestamp_str.replace('T', ' '), '%Y-%m-%d %H:%M:%S')
             return dt.replace(tzinfo=timezone.utc)
         
         # Parse the datetime part
@@ -94,6 +87,9 @@ def parse_iso_datetime(timestamp_str: str) -> datetime:
     
     LOG.warning(f"Could not parse timestamp '{timestamp_str}', using current time")
     return datetime.now(timezone.utc)
+
+# Use the Python 3.6 compatible function
+parse_iso_datetime = parse_iso_datetime_python36
 
 class MetricsDatabase:
     """SQLite database for storing firewall metrics with automatic schema migration"""
@@ -383,7 +379,6 @@ class MetricsDatabase:
     def cleanup_old_metrics(self, days_to_keep: int = 30) -> int:
         """Remove metrics older than specified days"""
         try:
-            from datetime import timedelta
             cutoff_time = datetime.now(timezone.utc) - timedelta(days=days_to_keep)
             
             with self._get_connection() as conn:

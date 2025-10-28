@@ -2,6 +2,7 @@
 """
 Data collection modules for PAN-OS Multi-Firewall Monitor
 Enhanced with per-second session info sampling for accurate throughput measurement
+Fixed for Python 3.6 compatibility
 """
 import time
 import logging
@@ -168,11 +169,28 @@ def _aggregate(values: List[float], mode: str = "mean") -> float:
     if mode == "min":
         return min(values)
     if mode == "p95":
-        import math
-        s = sorted(values)
-        idx = max(0, min(len(s)-1, math.ceil(0.95*len(s))-1))
-        return s[idx]
+        return calculate_percentile(values, 0.95)
     return sum(values) / len(values)
+
+def calculate_percentile(values: List[float], percentile: float) -> float:
+    """Calculate percentile - Python 3.6 compatible version"""
+    if not values:
+        return 0.0
+    sorted_values = sorted(values)
+    if len(sorted_values) == 1:
+        return sorted_values[0]
+    
+    # Calculate index for the percentile
+    index = (len(sorted_values) - 1) * percentile
+    lower_index = int(index)
+    upper_index = min(lower_index + 1, len(sorted_values) - 1)
+    
+    if lower_index == upper_index:
+        return sorted_values[lower_index]
+    
+    # Linear interpolation
+    weight = index - lower_index
+    return sorted_values[lower_index] * (1 - weight) + sorted_values[upper_index] * weight
 
 def parse_cpu_from_debug_status(xml_text: str) -> Tuple[Dict[str, float], str]:
     """
@@ -384,7 +402,7 @@ def parse_throughput_from_session_info(xml_text: str) -> Tuple[Dict[str, float],
         return {}, f"throughput parse error: {e}"
 
 def aggregate_session_info_samples(samples: List[SessionInfoSample]) -> SessionInfoAggregates:
-    """Aggregate per-second session info samples into statistics"""
+    """Aggregate per-second session info samples into statistics - Python 3.6 compatible"""
     if not samples:
         return SessionInfoAggregates()
     
@@ -412,13 +430,13 @@ def aggregate_session_info_samples(samples: List[SessionInfoSample]) -> SessionI
         aggregates.kbps_mean = statistics.mean(kbps_values)
         aggregates.kbps_max = max(kbps_values)
         aggregates.kbps_min = min(kbps_values)
-        aggregates.kbps_p95 = statistics.quantiles(kbps_values, n=20)[18] if len(kbps_values) >= 20 else max(kbps_values)
+        aggregates.kbps_p95 = calculate_percentile(kbps_values, 0.95)
     
     if pps_values:
         aggregates.pps_mean = statistics.mean(pps_values)
         aggregates.pps_max = max(pps_values)
         aggregates.pps_min = min(pps_values)
-        aggregates.pps_p95 = statistics.quantiles(pps_values, n=20)[18] if len(pps_values) >= 20 else max(pps_values)
+        aggregates.pps_p95 = calculate_percentile(pps_values, 0.95)
     
     return aggregates
 
