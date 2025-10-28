@@ -74,12 +74,7 @@
         }
         button:hover { background: #2980b9; }
         .sampling-info {
-            background: rgba(52, 152, 219, 0.1);
-            border-radius: 8px;
-            padding: 12px;
-            margin-bottom: 20px;
-            font-size: 0.9em;
-            color: #2c3e50;
+            display: none; /* Hide the sampling info div instead of removing it */
         }
         .current-values {
             display: grid;
@@ -137,6 +132,8 @@
             justify-content: space-between;
             align-items: center;
             margin-bottom: 15px;
+            flex-wrap: wrap;
+            gap: 10px;
         }
         .metric-title {
             font-size: 1.3em;
@@ -145,21 +142,33 @@
         }
         .metric-toggle {
             display: flex;
-            gap: 8px;
+            gap: 3px;
+            flex-wrap: wrap;
         }
         .toggle-btn {
-            padding: 4px 8px;
+            padding: 6px 10px;
             border: 1px solid #bdc3c7;
             background: white;
             border-radius: 4px;
-            font-size: 0.8em;
+            font-size: 0.9em;
             cursor: pointer;
             transition: all 0.2s;
+            min-width: 40px;
+            text-align: center;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            color: #000000; /* Black text for better contrast */
+            font-weight: 500;
         }
         .toggle-btn.active {
             background: #3498db;
             color: white;
             border-color: #3498db;
+            font-weight: bold;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+        }
+        .toggle-btn:hover:not(.active) {
+            background: #f5f5f5;
+            border-color: #95a5a6;
         }
         .chart-container {
             position: relative;
@@ -186,32 +195,86 @@
             margin-bottom: 20px;
         }
         .download-info {
-            font-size: 0.9em;
-            color: #7f8c8d;
+            font-size: 1em;
+            color: #000000; /* Black text for better contrast */
             margin-top: 5px;
-            font-style: italic;
+            margin-bottom: 10px;
+            padding: 12px;
+            border-left: 3px solid #3498db;
+            background: rgba(255, 255, 255, 0.9); /* Whiter background for better contrast */
+            line-height: 1.5;
+            font-weight: bold; /* Bold text as requested */
+            border-radius: 5px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
         }
         .stats-summary {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-            gap: 10px;
+            gap: 15px;
             background: rgba(52, 152, 219, 0.1);
             border-radius: 8px;
-            padding: 12px;
-            margin-bottom: 10px;
+            padding: 18px;
+            margin-bottom: 15px;
         }
         .stat-item {
             text-align: center;
+            background: rgba(255,255,255,0.9);
+            padding: 12px;
+            border-radius: 8px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.05);
         }
         .stat-value {
-            font-size: 1.1em;
-            font-weight: 600;
+            font-size: 1.4em;
+            font-weight: 700;
             color: #2c3e50;
+            margin-bottom: 5px;
         }
         .stat-label {
-            font-size: 0.7em;
+            font-size: 0.9em;
             color: #7f8c8d;
             text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .sampling-description {
+            padding: 12px;
+            background: rgba(255,255,255,0.9);
+            border-radius: 8px;
+            margin-top: 15px;
+            line-height: 1.6;
+            color: #000000; /* Black text for better contrast */
+            font-weight: 600;
+        }
+        .legend-container {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 15px;
+            margin: 15px 0;
+            padding: 10px;
+            background: rgba(255,255,255,0.9);
+            border-radius: 8px;
+        }
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            font-size: 0.9em;
+        }
+        .legend-color {
+            width: 15px;
+            height: 15px;
+            border-radius: 3px;
+            display: inline-block;
+        }
+        @media (max-width: 768px) {
+            .metric-header {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+            .metric-toggle {
+                margin-top: 10px;
+                width: 100%;
+                justify-content: center;
+            }
         }
     </style>
 </head>
@@ -301,6 +364,9 @@
                         <button class="toggle-btn" onclick="toggleThroughputView('all')" id="tput-all">All</button>
                     </div>
                 </div>
+                <div class="legend-container" id="throughputLegend">
+                    <!-- Legend will be populated by JavaScript -->
+                </div>
                 <div class="chart-container">
                     <canvas id="throughputChart"></canvas>
                 </div>
@@ -316,6 +382,9 @@
                         <button class="toggle-btn" onclick="togglePpsView('p95')" id="pps-p95">P95</button>
                         <button class="toggle-btn" onclick="togglePpsView('all')" id="pps-all">All</button>
                     </div>
+                </div>
+                <div class="legend-container" id="ppsLegend">
+                    <!-- Legend will be populated by JavaScript -->
                 </div>
                 <div class="chart-container">
                     <canvas id="ppsChart"></canvas>
@@ -384,6 +453,8 @@
             
             // Update chart
             updateThroughputChart();
+            // Update legend
+            updateThroughputLegend();
         }
 
         function togglePpsView(view) {
@@ -395,6 +466,8 @@
             
             // Update chart
             updatePpsChart();
+            // Update legend
+            updatePpsLegend();
         }
 
         async function fetchMetrics() {
@@ -504,7 +577,7 @@
                 csvRows.push(csvRow.join(','));
             });
 
-            const csvContent = csvRows.join('\\n');
+            const csvContent = csvRows.join('\n');
 
             const now = new Date();
             const startDate = document.getElementById('startDate').value;
@@ -543,27 +616,119 @@
         }
 
         function updateSamplingInfo(data) {
-            if (!data || data.length === 0) return;
+            // This function has been modified to do nothing so the sampling info doesn't show
+            // We're keeping the function itself so other code that calls it doesn't break
+            return;
+        }
+
+        function updateThroughputLegend() {
+            if (!lastFetchedData || lastFetchedData.length === 0) return;
             
-            const latest = data[0];
-            const samplingHtml = `
-                <div class="stats-summary">
-                    <div class="stat-item">
-                        <div class="stat-value">${latest.session_sample_count || '--'}</div>
-                        <div class="stat-label">Samples</div>
+            let legendHtml = '';
+            
+            if (currentThroughputView === 'all') {
+                legendHtml = `
+                    <div class="legend-item">
+                        <span class="legend-color" style="background-color: #2ecc71;"></span>
+                        <span>Mean (Mbps)</span>
                     </div>
-                    <div class="stat-item">
-                        <div class="stat-value">${formatValue((latest.session_success_rate || 0) * 100, 1)}%</div>
-                        <div class="stat-label">Success Rate</div>
+                    <div class="legend-item">
+                        <span class="legend-color" style="background-color: #e74c3c;"></span>
+                        <span>Max (Mbps)</span>
                     </div>
-                    <div class="stat-item">
-                        <div class="stat-value">${formatValue(latest.session_sampling_period)}s</div>
-                        <div class="stat-label">Period</div>
+                    <div class="legend-item">
+                        <span class="legend-color" style="background-color: #f39c12;"></span>
+                        <span>P95 (Mbps)</span>
                     </div>
-                </div>
-                📊 Per-second sampling provides: Mean (typical), Max (burst peaks), Min (baseline), P95 (capacity planning)
-            `;
-            document.getElementById('samplingInfo').innerHTML = samplingHtml;
+                    <div class="legend-item">
+                        <span class="legend-color" style="background-color: #95a5a6;"></span>
+                        <span>Min (Mbps)</span>
+                    </div>
+                `;
+            } else {
+                let label, color;
+                switch(currentThroughputView) {
+                    case 'max':
+                        label = 'Max Throughput (Mbps)';
+                        color = '#e74c3c';
+                        break;
+                    case 'min':
+                        label = 'Min Throughput (Mbps)';
+                        color = '#95a5a6';
+                        break;
+                    case 'p95':
+                        label = 'P95 Throughput (Mbps)';
+                        color = '#f39c12';
+                        break;
+                    default:
+                        label = 'Mean Throughput (Mbps)';
+                        color = '#2ecc71';
+                }
+                
+                legendHtml = `
+                    <div class="legend-item">
+                        <span class="legend-color" style="background-color: ${color};"></span>
+                        <span>${label}</span>
+                    </div>
+                `;
+            }
+            
+            document.getElementById('throughputLegend').innerHTML = legendHtml;
+        }
+
+        function updatePpsLegend() {
+            if (!lastFetchedData || lastFetchedData.length === 0) return;
+            
+            let legendHtml = '';
+            
+            if (currentPpsView === 'all') {
+                legendHtml = `
+                    <div class="legend-item">
+                        <span class="legend-color" style="background-color: #9b59b6;"></span>
+                        <span>Mean PPS</span>
+                    </div>
+                    <div class="legend-item">
+                        <span class="legend-color" style="background-color: #e74c3c;"></span>
+                        <span>Max PPS</span>
+                    </div>
+                    <div class="legend-item">
+                        <span class="legend-color" style="background-color: #f39c12;"></span>
+                        <span>P95 PPS</span>
+                    </div>
+                    <div class="legend-item">
+                        <span class="legend-color" style="background-color: #95a5a6;"></span>
+                        <span>Min PPS</span>
+                    </div>
+                `;
+            } else {
+                let label, color;
+                switch(currentPpsView) {
+                    case 'max':
+                        label = 'Max PPS';
+                        color = '#e74c3c';
+                        break;
+                    case 'min':
+                        label = 'Min PPS';
+                        color = '#95a5a6';
+                        break;
+                    case 'p95':
+                        label = 'P95 PPS';
+                        color = '#f39c12';
+                        break;
+                    default:
+                        label = 'Mean PPS';
+                        color = '#9b59b6';
+                }
+                
+                legendHtml = `
+                    <div class="legend-item">
+                        <span class="legend-color" style="background-color: ${color};"></span>
+                        <span>${label}</span>
+                    </div>
+                `;
+            }
+            
+            document.getElementById('ppsLegend').innerHTML = legendHtml;
         }
 
         function updateCurrentValues(data) {
@@ -662,8 +827,7 @@
                     },
                     plugins: {
                         legend: {
-                            position: 'top',
-                            labels: { color: '#333' }
+                            display: false // We'll use custom legends
                         }
                     },
                     interaction: {
@@ -932,6 +1096,10 @@
             // Update throughput and PPS charts
             updateThroughputChart();
             updatePpsChart();
+            
+            // Update legends
+            updateThroughputLegend();
+            updatePpsLegend();
         }
 
         async function refreshData() {
