@@ -2,6 +2,7 @@
 """
 Database management for PAN-OS Multi-Firewall Monitor
 Provides persistent storage for metrics data using SQLite
+Enhanced with automatic schema migration for throughput and PPS statistics
 """
 import sqlite3
 import logging
@@ -93,8 +94,9 @@ def parse_iso_datetime(timestamp_str: str) -> datetime:
     
     LOG.warning(f"Could not parse timestamp '{timestamp_str}', using current time")
     return datetime.now(timezone.utc)
+
 class MetricsDatabase:
-    """SQLite database for storing firewall metrics"""
+    """SQLite database for storing firewall metrics with automatic schema migration"""
     
     def __init__(self, db_path: str):
         self.db_path = Path(db_path)
@@ -102,7 +104,7 @@ class MetricsDatabase:
         self._init_database()
     
     def _init_database(self):
-        """Initialize database schema"""
+        """Initialize database schema with automatic migration"""
         with self._get_connection() as conn:
             # Create firewalls table
             conn.execute("""
@@ -159,7 +161,53 @@ class MetricsDatabase:
             
             conn.commit()
         
-        LOG.info(f"Database initialized: {self.db_path}")
+        # Automatically migrate schema to add enhanced statistics columns
+        self._migrate_schema()
+        
+        LOG.info(f"Database initialized with schema migration: {self.db_path}")
+    
+    def _migrate_schema(self):
+        """Automatically detect and add new columns for enhanced statistics"""
+        with self._get_connection() as conn:
+            # Check what columns currently exist in metrics table
+            cursor = conn.execute("PRAGMA table_info(metrics)")
+            existing_columns = [row[1] for row in cursor.fetchall()]
+            
+            # Define enhanced columns we want to add
+            enhanced_columns = [
+                ('throughput_mbps_max', 'REAL', 'Maximum throughput during sampling period'),
+                ('throughput_mbps_min', 'REAL', 'Minimum throughput during sampling period'),
+                ('throughput_mbps_p95', 'REAL', '95th percentile throughput'),
+                ('pps_max', 'REAL', 'Maximum packets per second'),
+                ('pps_min', 'REAL', 'Minimum packets per second'),
+                ('pps_p95', 'REAL', '95th percentile packets per second'),
+                ('session_sample_count', 'INTEGER', 'Number of per-second samples'),
+                ('session_success_rate', 'REAL', 'Success rate of sampling (0.0-1.0)'),
+                ('session_sampling_period', 'REAL', 'Actual sampling period in seconds')
+            ]
+            
+            # Track migration progress
+            added_columns = []
+            
+            # Add any missing columns
+            for column_name, column_type, description in enhanced_columns:
+                if column_name not in existing_columns:
+                    try:
+                        conn.execute(f"ALTER TABLE metrics ADD COLUMN {column_name} {column_type}")
+                        added_columns.append(column_name)
+                        LOG.info(f"✅ Enhanced database: Added '{column_name}' column ({description})")
+                    except Exception as e:
+                        LOG.warning(f"❌ Could not add column '{column_name}': {e}")
+            
+            # Commit all changes
+            conn.commit()
+            
+            # Log migration summary
+            if added_columns:
+                LOG.info(f"🚀 Schema migration completed: Added {len(added_columns)} new columns for enhanced statistics")
+                LOG.info(f"   New capabilities: Enhanced throughput and PPS tracking with min/max/P95 statistics")
+            else:
+                LOG.debug("✅ Database schema is up to date - no migration needed")
     
     @contextmanager
     def _get_connection(self):
@@ -187,7 +235,7 @@ class MetricsDatabase:
             return False
     
     def insert_metrics(self, firewall_name: str, metrics: Dict[str, Any]) -> bool:
-        """Insert metrics data for a firewall"""
+        """Insert enhanced metrics data for a firewall"""
         try:
             with self._get_connection() as conn:
                 # Convert timestamp string to datetime if needed
@@ -200,12 +248,16 @@ class MetricsDatabase:
                     # Add UTC timezone if missing
                     timestamp = timestamp.replace(tzinfo=timezone.utc)
                 
+                # Enhanced INSERT statement with all new columns
                 conn.execute("""
                     INSERT INTO metrics (
                         firewall_name, timestamp, cpu_user, cpu_system, cpu_idle,
                         mgmt_cpu, data_plane_cpu, data_plane_cpu_mean, data_plane_cpu_max, 
-                        data_plane_cpu_p95, throughput_mbps_total, pps_total, pbuf_util_percent
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        data_plane_cpu_p95, throughput_mbps_total, throughput_mbps_max,
+                        throughput_mbps_min, throughput_mbps_p95, pps_total, pps_max,
+                        pps_min, pps_p95, session_sample_count, session_success_rate,
+                        session_sampling_period, pbuf_util_percent
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     firewall_name,
                     timestamp,
@@ -218,13 +270,22 @@ class MetricsDatabase:
                     metrics.get('data_plane_cpu_max'),
                     metrics.get('data_plane_cpu_p95'),
                     metrics.get('throughput_mbps_total'),
+                    metrics.get('throughput_mbps_max'),      # Enhanced
+                    metrics.get('throughput_mbps_min'),      # Enhanced
+                    metrics.get('throughput_mbps_p95'),      # Enhanced
                     metrics.get('pps_total'),
+                    metrics.get('pps_max'),                  # Enhanced
+                    metrics.get('pps_min'),                  # Enhanced
+                    metrics.get('pps_p95'),                  # Enhanced
+                    metrics.get('session_sample_count'),     # Enhanced
+                    metrics.get('session_success_rate'),     # Enhanced
+                    metrics.get('session_sampling_period'),  # Enhanced
                     metrics.get('pbuf_util_percent')
                 ))
                 conn.commit()
                 return True
         except Exception as e:
-            LOG.error(f"Failed to insert metrics for {firewall_name}: {e}")
+            LOG.error(f"Failed to insert enhanced metrics for {firewall_name}: {e}")
             return False
     
     def get_metrics(self, firewall_name: str, start_time: Optional[datetime] = None,
@@ -284,7 +345,7 @@ class MetricsDatabase:
             return []
     
     def get_firewall_summary(self, firewall_name: str) -> Optional[Dict[str, Any]]:
-        """Get summary statistics for a firewall"""
+        """Get enhanced summary statistics for a firewall"""
         try:
             with self._get_connection() as conn:
                 cursor = conn.execute("""
@@ -298,6 +359,16 @@ class MetricsDatabase:
                         AVG(data_plane_cpu_p95) as avg_dp_cpu_p95,
                         AVG(throughput_mbps_total) as avg_throughput,
                         MAX(throughput_mbps_total) as max_throughput,
+                        AVG(throughput_mbps_max) as avg_throughput_max,
+                        MAX(throughput_mbps_max) as peak_throughput_max,
+                        AVG(throughput_mbps_p95) as avg_throughput_p95,
+                        AVG(pps_total) as avg_pps,
+                        MAX(pps_total) as max_pps,
+                        AVG(pps_max) as avg_pps_max,
+                        MAX(pps_max) as peak_pps_max,
+                        AVG(pps_p95) as avg_pps_p95,
+                        AVG(session_sample_count) as avg_sample_count,
+                        AVG(session_success_rate) as avg_success_rate,
                         AVG(pbuf_util_percent) as avg_pbuf_util
                     FROM metrics 
                     WHERE firewall_name = ?
@@ -306,7 +377,7 @@ class MetricsDatabase:
                 row = cursor.fetchone()
                 return dict(row) if row else None
         except Exception as e:
-            LOG.error(f"Failed to get summary for {firewall_name}: {e}")
+            LOG.error(f"Failed to get enhanced summary for {firewall_name}: {e}")
             return None
     
     def cleanup_old_metrics(self, days_to_keep: int = 30) -> int:
@@ -344,7 +415,7 @@ class MetricsDatabase:
     
     def export_metrics_to_dict(self, firewall_name: str, start_time: Optional[datetime] = None,
                               end_time: Optional[datetime] = None) -> List[Dict[str, Any]]:
-        """Export metrics to dictionary format suitable for pandas/CSV"""
+        """Export enhanced metrics to dictionary format suitable for pandas/CSV"""
         metrics = self.get_metrics(firewall_name, start_time, end_time)
         
         # Convert timestamps to ISO format strings for export
@@ -364,7 +435,7 @@ class MetricsDatabase:
         return metrics
     
     def get_database_stats(self) -> Dict[str, Any]:
-        """Get database statistics"""
+        """Get enhanced database statistics"""
         try:
             with self._get_connection() as conn:
                 # Get total metrics count
@@ -386,10 +457,21 @@ class MetricsDatabase:
                 """)
                 date_range = cursor.fetchone()
                 
+                # Get enhanced sampling statistics
+                cursor = conn.execute("""
+                    SELECT 
+                        AVG(session_sample_count) as avg_samples,
+                        AVG(session_success_rate) as avg_success_rate,
+                        AVG(session_sampling_period) as avg_sampling_period
+                    FROM metrics 
+                    WHERE session_sample_count IS NOT NULL
+                """)
+                sampling_stats = cursor.fetchone()
+                
                 # Get database file size
                 db_size = self.db_path.stat().st_size if self.db_path.exists() else 0
                 
-                return {
+                stats = {
                     'total_metrics': total_metrics,
                     'firewall_counts': firewall_counts,
                     'earliest_metric': date_range['earliest'],
@@ -397,8 +479,21 @@ class MetricsDatabase:
                     'database_size_bytes': db_size,
                     'database_size_mb': round(db_size / (1024 * 1024), 2)
                 }
+                
+                # Add enhanced sampling statistics if available
+                if sampling_stats and sampling_stats['avg_samples']:
+                    stats.update({
+                        'avg_samples_per_poll': round(sampling_stats['avg_samples'] or 0, 1),
+                        'avg_success_rate_percent': round((sampling_stats['avg_success_rate'] or 0) * 100, 1),
+                        'avg_sampling_period_seconds': round(sampling_stats['avg_sampling_period'] or 0, 1),
+                        'enhanced_statistics_available': True
+                    })
+                else:
+                    stats['enhanced_statistics_available'] = False
+                
+                return stats
         except Exception as e:
-            LOG.error(f"Failed to get database stats: {e}")
+            LOG.error(f"Failed to get enhanced database stats: {e}")
             return {}
     
     def set_config_value(self, key: str, value: Any):
@@ -455,36 +550,60 @@ def migrate_csv_to_database(csv_file: str, db: MetricsDatabase, firewall_name: s
         LOG.error(f"Failed to migrate CSV to database: {e}")
 
 if __name__ == "__main__":
-    # Example usage
-    db = MetricsDatabase("test_metrics.db")
+    # Example usage demonstrating automatic migration
+    db = MetricsDatabase("test_enhanced_metrics.db")
     
     # Register a firewall
     db.register_firewall("test_fw", "https://192.168.1.1")
     
-    # Insert some test metrics
+    # Insert enhanced test metrics
     import time
-    for i in range(5):
-        test_metrics = {
+    for i in range(3):
+        enhanced_metrics = {
             'timestamp': datetime.now(timezone.utc),
             'cpu_user': 10.0 + i,
             'cpu_system': 5.0 + i,
             'mgmt_cpu': 15.0 + i,
             'data_plane_cpu': 20.0 + i,
+            'data_plane_cpu_mean': 20.0 + i,
+            'data_plane_cpu_max': 25.0 + i * 2,
+            'data_plane_cpu_p95': 23.0 + i * 1.5,
             'throughput_mbps_total': 100.0 + i * 10,
+            'throughput_mbps_max': 150.0 + i * 15,     # Enhanced
+            'throughput_mbps_min': 50.0 + i * 5,       # Enhanced
+            'throughput_mbps_p95': 130.0 + i * 12,     # Enhanced
             'pps_total': 1000 + i * 100,
+            'pps_max': 1500 + i * 150,                 # Enhanced
+            'pps_min': 500 + i * 50,                   # Enhanced
+            'pps_p95': 1300 + i * 130,                 # Enhanced
+            'session_sample_count': 30,                # Enhanced
+            'session_success_rate': 0.95,              # Enhanced
+            'session_sampling_period': 30.0,           # Enhanced
             'pbuf_util_percent': 2.0 + i * 0.5
         }
-        db.insert_metrics("test_fw", test_metrics)
+        db.insert_metrics("test_fw", enhanced_metrics)
         time.sleep(1)
     
-    # Retrieve metrics
+    # Retrieve and display enhanced metrics
     metrics = db.get_latest_metrics("test_fw", 3)
-    print(f"Retrieved {len(metrics)} metrics")
+    print(f"📊 Retrieved {len(metrics)} enhanced metrics")
     
-    # Get summary
+    if metrics:
+        latest = metrics[0]
+        print("🚀 Latest Enhanced Metrics Sample:")
+        print(f"   Throughput: mean={latest.get('throughput_mbps_total', 'N/A')}, "
+              f"max={latest.get('throughput_mbps_max', 'N/A')}, "
+              f"p95={latest.get('throughput_mbps_p95', 'N/A')} Mbps")
+        print(f"   PPS: mean={latest.get('pps_total', 'N/A')}, "
+              f"max={latest.get('pps_max', 'N/A')}, "
+              f"p95={latest.get('pps_p95', 'N/A')}")
+        print(f"   Sample Quality: {latest.get('session_sample_count', 'N/A')} samples, "
+              f"{(latest.get('session_success_rate', 0) * 100):.1f}% success")
+    
+    # Get enhanced summary
     summary = db.get_firewall_summary("test_fw")
-    print(f"Summary: {summary}")
+    print(f"📈 Enhanced Summary: {summary}")
     
-    # Get database stats
+    # Get enhanced database stats
     stats = db.get_database_stats()
-    print(f"Database stats: {stats}")
+    print(f"🗄️  Enhanced Database Stats: {stats}")

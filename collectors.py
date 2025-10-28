@@ -631,7 +631,7 @@ class FirewallCollector:
         return {}
     
     def collect_session_info_aggregated(self) -> Dict[str, float]:
-        """Collect aggregated session info from per-second samples"""
+        """Collect aggregated session info from per-second samples with enhanced statistics"""
         current_time = datetime.now(timezone.utc)
         
         # Get samples since last collection
@@ -644,21 +644,23 @@ class FirewallCollector:
         # Aggregate the samples
         aggregates = aggregate_session_info_samples(samples)
         
-        # Convert to metrics dictionary
+        # Convert to enhanced metrics dictionary with ALL statistics
         metrics = {
-            # Mean values (primary metrics)
+            # Original metrics (backward compatibility)
             "throughput_mbps_total": aggregates.kbps_mean / 1000.0,
             "pps_total": aggregates.pps_mean,
             
-            # Additional statistics
+            # NEW: Enhanced throughput statistics
             "throughput_mbps_max": aggregates.kbps_max / 1000.0,
             "throughput_mbps_min": aggregates.kbps_min / 1000.0,
             "throughput_mbps_p95": aggregates.kbps_p95 / 1000.0,
+            
+            # NEW: Enhanced PPS statistics
             "pps_max": aggregates.pps_max,
             "pps_min": aggregates.pps_min,
             "pps_p95": aggregates.pps_p95,
             
-            # Sampling metadata
+            # NEW: Sampling metadata for quality assessment
             "session_sample_count": aggregates.sample_count,
             "session_success_rate": aggregates.success_rate,
             "session_sampling_period": aggregates.sampling_period
@@ -671,12 +673,15 @@ class FirewallCollector:
         cutoff_time = current_time - timedelta(minutes=2)
         self.session_sampler.clear_samples_before(cutoff_time)
         
-        LOG.debug(f"{self.name}: Aggregated {aggregates.sample_count} session samples "
+        LOG.debug(f"{self.name}: Enhanced aggregation - {aggregates.sample_count} samples "
                  f"({aggregates.success_rate:.1%} success rate, "
-                 f"{aggregates.sampling_period:.1f}s period)")
+                 f"{aggregates.sampling_period:.1f}s period) - "
+                 f"Throughput: mean={metrics['throughput_mbps_total']:.1f}, "
+                 f"max={metrics['throughput_mbps_max']:.1f}, "
+                 f"p95={metrics['throughput_mbps_p95']:.1f} Mbps")
         
         return metrics
-    
+
     def collect_metrics(self) -> CollectionResult:
         """Collect metrics from this firewall"""
         if not self.authenticated:
