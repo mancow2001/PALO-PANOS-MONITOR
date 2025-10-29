@@ -14,7 +14,7 @@
             min-height: 100vh;
             color: #333;
         }
-        .container { max-width: 1600px; margin: 0 auto; padding: 20px; }
+        .container { max-width: 1800px; margin: 0 auto; padding: 20px; }
         .header {
             background: rgba(255,255,255,0.95);
             border-radius: 15px;
@@ -73,9 +73,6 @@
             font-weight: 500;
         }
         button:hover { background: #2980b9; }
-        .sampling-info {
-            display: none; /* Hide the sampling info div instead of removing it */
-        }
         .current-values {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -115,7 +112,7 @@
         .cpu-low { color: #27ae60; }
         .metrics-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(450px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(500px, 1fr));
             gap: 20px;
             margin-bottom: 20px;
         }
@@ -156,7 +153,7 @@
             min-width: 40px;
             text-align: center;
             box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-            color: #000000; /* Black text for better contrast */
+            color: #000000;
             font-weight: 500;
         }
         .toggle-btn.active {
@@ -169,6 +166,121 @@
         .toggle-btn:hover:not(.active) {
             background: #f5f5f5;
             border-color: #95a5a6;
+        }
+        .interface-selector {
+            display: flex;
+            gap: 5px;
+            flex-wrap: wrap;
+            margin-bottom: 10px;
+            padding: 10px;
+            background: rgba(255,255,255,0.9);
+            border-radius: 8px;
+            border: 1px solid #e0e0e0;
+        }
+        .interface-selector-header {
+            width: 100%;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #2c3e50;
+        }
+        .interface-selector-controls {
+            display: flex;
+            gap: 5px;
+        }
+        .interface-btn {
+            padding: 6px 12px;
+            border: 2px solid #bdc3c7;
+            background: white;
+            border-radius: 6px;
+            font-size: 0.85em;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            color: #2c3e50;
+            font-weight: 500;
+            position: relative;
+            white-space: nowrap;
+        }
+        .interface-btn:hover:not(.active) {
+            background: #f8f9fa;
+            border-color: #95a5a6;
+            transform: translateY(-1px);
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .interface-btn.active {
+            background: linear-gradient(135deg, #27ae60, #2ecc71);
+            color: white;
+            border-color: #27ae60;
+            font-weight: bold;
+            box-shadow: 0 3px 6px rgba(39, 174, 96, 0.3);
+        }
+        .interface-btn.active:hover {
+            background: linear-gradient(135deg, #229954, #27ae60);
+            transform: translateY(-1px);
+            box-shadow: 0 4px 8px rgba(39, 174, 96, 0.4);
+        }
+        .interface-btn .interface-status {
+            position: absolute;
+            top: -3px;
+            right: -3px;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #27ae60;
+            border: 2px solid white;
+            display: none;
+        }
+        .interface-btn.active .interface-status {
+            display: block;
+        }
+        .interface-btn.has-data {
+            border-left: 4px solid #3498db;
+        }
+        .interface-btn.no-data {
+            opacity: 0.6;
+            border-left: 4px solid #e74c3c;
+        }
+        .select-all-btn, .select-none-btn {
+            padding: 4px 8px;
+            border: 1px solid #95a5a6;
+            background: #ecf0f1;
+            border-radius: 4px;
+            font-size: 0.75em;
+            cursor: pointer;
+            color: #2c3e50;
+            font-weight: 500;
+            transition: all 0.2s ease;
+        }
+        .select-all-btn:hover {
+            background: #d5dbdb;
+            border-color: #7f8c8d;
+        }
+        .select-none-btn:hover {
+            background: #d5dbdb;
+            border-color: #7f8c8d;
+        }
+        .interface-info {
+            width: 100%;
+            font-size: 0.8em;
+            color: #7f8c8d;
+            margin-top: 5px;
+            text-align: center;
+        }
+        .interface-search {
+            width: 100%;
+            padding: 6px 10px;
+            border: 1px solid #bdc3c7;
+            border-radius: 4px;
+            font-size: 0.85em;
+            margin-bottom: 8px;
+            background: white;
+        }
+        .interface-search:focus {
+            outline: none;
+            border-color: #3498db;
+            box-shadow: 0 0 0 2px rgba(52, 152, 219, 0.2);
         }
         .chart-container {
             position: relative;
@@ -194,54 +306,13 @@
             border-radius: 8px;
             margin-bottom: 20px;
         }
-        .download-info {
-            font-size: 1em;
-            color: #000000; /* Black text for better contrast */
-            margin-top: 5px;
-            margin-bottom: 10px;
-            padding: 12px;
-            border-left: 3px solid #3498db;
-            background: rgba(255, 255, 255, 0.9); /* Whiter background for better contrast */
-            line-height: 1.5;
-            font-weight: bold; /* Bold text as requested */
-            border-radius: 5px;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-        }
-        .stats-summary {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-            gap: 15px;
+        .info-banner {
             background: rgba(52, 152, 219, 0.1);
-            border-radius: 8px;
-            padding: 18px;
-            margin-bottom: 15px;
-        }
-        .stat-item {
-            text-align: center;
-            background: rgba(255,255,255,0.9);
-            padding: 12px;
-            border-radius: 8px;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.05);
-        }
-        .stat-value {
-            font-size: 1.4em;
-            font-weight: 700;
+            border: 1px solid #3498db;
             color: #2c3e50;
-            margin-bottom: 5px;
-        }
-        .stat-label {
-            font-size: 0.9em;
-            color: #7f8c8d;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-        .sampling-description {
-            padding: 12px;
-            background: rgba(255,255,255,0.9);
+            padding: 15px;
             border-radius: 8px;
-            margin-top: 15px;
-            line-height: 1.6;
-            color: #000000; /* Black text for better contrast */
+            margin-bottom: 20px;
             font-weight: 600;
         }
         .legend-container {
@@ -264,6 +335,9 @@
             height: 15px;
             border-radius: 3px;
             display: inline-block;
+        }
+        .wide-metric-card {
+            grid-column: 1 / -1;
         }
         @media (max-width: 768px) {
             .metric-header {
@@ -331,12 +405,8 @@
             </div>
         </div>
         
-        <div class="download-info">
-            💡 Enhanced with per-second sampling statistics: Mean, Max, Min, and P95 values for throughput and PPS
-        </div>
-
-        <div class="sampling-info" id="samplingInfo">
-            <!-- Sampling information will be populated by JavaScript -->
+        <div class="info-banner">
+            🚀 Enhanced Monitoring: Session-based throughput + Accurate interface bandwidth + Session statistics
         </div>
 
         <div class="current-values" id="currentValues">
@@ -355,26 +425,60 @@
 
             <div class="metric-card">
                 <div class="metric-header">
-                    <span class="metric-title">🚀 Network Throughput</span>
+                    <span class="metric-title">🚀 Session-Based Throughput</span>
                     <div class="metric-toggle">
-                        <button class="toggle-btn active" onclick="toggleThroughputView('mean')" id="tput-mean">Mean</button>
-                        <button class="toggle-btn" onclick="toggleThroughputView('max')" id="tput-max">Max</button>
-                        <button class="toggle-btn" onclick="toggleThroughputView('min')" id="tput-min">Min</button>
-                        <button class="toggle-btn" onclick="toggleThroughputView('p95')" id="tput-p95">P95</button>
-                        <button class="toggle-btn" onclick="toggleThroughputView('all')" id="tput-all">All</button>
+                        <button class="toggle-btn active" onclick="toggleSessionThroughputView('mean')" id="session-tput-mean">Mean</button>
+                        <button class="toggle-btn" onclick="toggleSessionThroughputView('max')" id="session-tput-max">Max</button>
+                        <button class="toggle-btn" onclick="toggleSessionThroughputView('min')" id="session-tput-min">Min</button>
+                        <button class="toggle-btn" onclick="toggleSessionThroughputView('p95')" id="session-tput-p95">P95</button>
+                        <button class="toggle-btn" onclick="toggleSessionThroughputView('all')" id="session-tput-all">All</button>
                     </div>
                 </div>
-                <div class="legend-container" id="throughputLegend">
+                <div class="legend-container" id="sessionThroughputLegend">
                     <!-- Legend will be populated by JavaScript -->
                 </div>
                 <div class="chart-container">
-                    <canvas id="throughputChart"></canvas>
+                    <canvas id="sessionThroughputChart"></canvas>
+                </div>
+            </div>
+
+            <div class="metric-card wide-metric-card">
+                <div class="metric-header">
+                    <span class="metric-title">🌐 Interface Bandwidth (Accurate)</span>
+                    <div class="metric-toggle">
+                        <button class="toggle-btn active" onclick="toggleInterfaceView('rx')" id="if-rx">RX Only</button>
+                        <button class="toggle-btn" onclick="toggleInterfaceView('tx')" id="if-tx">TX Only</button>
+                        <button class="toggle-btn" onclick="toggleInterfaceView('both')" id="if-both">RX+TX</button>
+                        <button class="toggle-btn" onclick="toggleInterfaceView('total')" id="if-total">Total</button>
+                    </div>
+                </div>
+                <div class="interface-selector" id="interfaceSelector">
+                    <div class="interface-selector-header">
+                        <span>Select Interfaces to Monitor:</span>
+                        <div class="interface-selector-controls">
+                            <button class="select-all-btn" onclick="selectAllInterfaces()">Select All</button>
+                            <button class="select-none-btn" onclick="selectNoInterfaces()">Select None</button>
+                        </div>
+                    </div>
+                    <input type="text" class="interface-search" id="interfaceSearch" placeholder="Search interfaces..." onkeyup="filterInterfaces()">
+                    <div id="interfaceButtons">
+                        <!-- Interface buttons will be populated by JavaScript -->
+                    </div>
+                    <div class="interface-info" id="interfaceInfo">
+                        <!-- Interface information will be populated by JavaScript -->
+                    </div>
+                </div>
+                <div class="legend-container" id="interfaceLegend">
+                    <!-- Legend will be populated by JavaScript -->
+                </div>
+                <div class="chart-container">
+                    <canvas id="interfaceChart"></canvas>
                 </div>
             </div>
 
             <div class="metric-card">
                 <div class="metric-header">
-                    <span class="metric-title">📊 Packets per Second</span>
+                    <span class="metric-title">📊 Session-Based PPS</span>
                     <div class="metric-toggle">
                         <button class="toggle-btn active" onclick="togglePpsView('mean')" id="pps-mean">Mean</button>
                         <button class="toggle-btn" onclick="togglePpsView('max')" id="pps-max">Max</button>
@@ -388,6 +492,15 @@
                 </div>
                 <div class="chart-container">
                     <canvas id="ppsChart"></canvas>
+                </div>
+            </div>
+
+            <div class="metric-card">
+                <div class="metric-header">
+                    <span class="metric-title">🔗 Session Statistics</span>
+                </div>
+                <div class="chart-container">
+                    <canvas id="sessionStatsChart"></canvas>
                 </div>
             </div>
 
@@ -411,11 +524,16 @@
         let refreshInterval;
         let userTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
         let currentCpuAggregation = 'mean';
-        let currentThroughputView = 'mean';
+        let currentSessionThroughputView = 'mean';
         let currentPpsView = 'mean';
+        let currentInterfaceView = 'both';
+        let selectedInterfaces = [];
+        let availableInterfaces = [];
         let lastFetchedData = [];
+        let lastFetchedInterfaceData = {};
+        let lastFetchedSessionStats = [];
 
-        console.log('User timezone detected:', userTimezone);
+        console.log('Enhanced interface monitoring dashboard loaded');
 
         function formatValue(value, decimals = 1) {
             if (value === null || value === undefined) return '--';
@@ -444,30 +562,142 @@
             return new Date(utcDatetime);
         }
 
-        function toggleThroughputView(view) {
-            currentThroughputView = view;
-            
-            // Update toggle buttons
-            document.querySelectorAll('[id^="tput-"]').forEach(btn => btn.classList.remove('active'));
-            document.getElementById(`tput-${view}`).classList.add('active');
-            
-            // Update chart
-            updateThroughputChart();
-            // Update legend
-            updateThroughputLegend();
+        function toggleSessionThroughputView(view) {
+            currentSessionThroughputView = view;
+            document.querySelectorAll('[id^="session-tput-"]').forEach(btn => btn.classList.remove('active'));
+            document.getElementById(`session-tput-${view}`).classList.add('active');
+            updateSessionThroughputChart();
+            updateSessionThroughputLegend();
         }
 
         function togglePpsView(view) {
             currentPpsView = view;
-            
-            // Update toggle buttons
             document.querySelectorAll('[id^="pps-"]').forEach(btn => btn.classList.remove('active'));
             document.getElementById(`pps-${view}`).classList.add('active');
-            
-            // Update chart
             updatePpsChart();
-            // Update legend
             updatePpsLegend();
+        }
+
+        function toggleInterfaceView(view) {
+            currentInterfaceView = view;
+            document.querySelectorAll('[id^="if-"]').forEach(btn => btn.classList.remove('active'));
+            document.getElementById(`if-${view}`).classList.add('active');
+            updateInterfaceChart();
+            updateInterfaceLegend();
+        }
+
+        function toggleInterface(interfaceName) {
+            const index = selectedInterfaces.indexOf(interfaceName);
+            if (index > -1) {
+                selectedInterfaces.splice(index, 1);
+            } else {
+                selectedInterfaces.push(interfaceName);
+            }
+            
+            updateInterfaceSelector();
+            updateInterfaceChart();
+            updateInterfaceLegend();
+            
+            // Update current values if this affects totals
+            if (lastFetchedData && lastFetchedData.length > 0) {
+                updateCurrentValues({
+                    metrics: lastFetchedData,
+                    interfaces: lastFetchedInterfaceData,
+                    sessions: lastFetchedSessionStats
+                });
+            }
+        }
+
+        function selectAllInterfaces() {
+            selectedInterfaces = [...availableInterfaces];
+            updateInterfaceSelector();
+            updateInterfaceChart();
+            updateInterfaceLegend();
+            
+            // Update current values
+            if (lastFetchedData && lastFetchedData.length > 0) {
+                updateCurrentValues({
+                    metrics: lastFetchedData,
+                    interfaces: lastFetchedInterfaceData,
+                    sessions: lastFetchedSessionStats
+                });
+            }
+        }
+
+        function selectNoInterfaces() {
+            selectedInterfaces = [];
+            updateInterfaceSelector();
+            updateInterfaceChart();
+            updateInterfaceLegend();
+            
+            // Update current values
+            if (lastFetchedData && lastFetchedData.length > 0) {
+                updateCurrentValues({
+                    metrics: lastFetchedData,
+                    interfaces: lastFetchedInterfaceData,
+                    sessions: lastFetchedSessionStats
+                });
+            }
+        }
+
+        function filterInterfaces() {
+            const searchTerm = document.getElementById('interfaceSearch').value.toLowerCase();
+            const buttons = document.querySelectorAll('#interfaceButtons .interface-btn');
+            
+            buttons.forEach(button => {
+                const interfaceName = button.dataset.interface.toLowerCase();
+                if (interfaceName.includes(searchTerm)) {
+                    button.style.display = 'inline-block';
+                } else {
+                    button.style.display = 'none';
+                }
+            });
+        }
+
+        function getInterfaceDisplayName(interfaceName, interfaceConfig) {
+            // Try to get display name from configuration
+            if (interfaceConfig && interfaceConfig.configured_interfaces) {
+                const configuredInterface = interfaceConfig.configured_interfaces.find(
+                    iface => iface.name === interfaceName
+                );
+                if (configuredInterface && configuredInterface.display_name) {
+                    return configuredInterface.display_name;
+                }
+            }
+            
+            // Auto-generate display name if not configured
+            return generateDisplayName(interfaceName);
+        }
+
+        function generateDisplayName(interfaceName) {
+            const name = interfaceName.toLowerCase();
+            
+            if (name.startsWith("ethernet1/1")) return "WAN/Internet";
+            if (name.startsWith("ethernet1/2")) return "LAN/Internal";
+            if (name.startsWith("ethernet1/3")) return "DMZ";
+            if (name.startsWith("ethernet")) {
+                const port = name.replace("ethernet", "").replace("1/", "");
+                return `Port ${port}`;
+            }
+            if (name.startsWith("ae")) {
+                const num = name.replace("ae", "");
+                return `Aggregate ${num}`;
+            }
+            if (name.startsWith("vlan")) {
+                const num = name.replace("vlan", "").replace(".", " ");
+                return `VLAN ${num}`;
+            }
+            if (name.startsWith("tunnel")) {
+                return `Tunnel ${name.replace('tunnel.', '')}`;
+            }
+            
+            // Capitalize first letter for unknown interfaces
+            return interfaceName.charAt(0).toUpperCase() + interfaceName.slice(1);
+        }
+
+        function hasInterfaceData(interfaceName) {
+            return lastFetchedInterfaceData[interfaceName] &&
+                   lastFetchedInterfaceData[interfaceName].length > 0;
         }
 
         async function fetchMetrics() {
@@ -496,245 +726,190 @@
             params.append('user_timezone', userTimezone);
 
             try {
-                const response = await fetch(`/api/firewall/${firewallName}/metrics?${params}`);
-                if (!response.ok) {
-                    throw new Error(`HTTP ${response.status}`);
+                // Fetch main metrics
+                const metricsResponse = await fetch(`/api/firewall/${firewallName}/metrics?${params}`);
+                if (!metricsResponse.ok) {
+                    throw new Error(`HTTP ${metricsResponse.status}`);
                 }
-                const data = await response.json();
+                const metricsData = await metricsResponse.json();
+                lastFetchedData = metricsData;
                 
-                lastFetchedData = data;
-                return data;
+                // Fetch interface configuration first
+                const configResponse = await fetch(`/api/firewall/${firewallName}/interface-config`);
+                let interfaceConfig = null;
+                if (configResponse.ok) {
+                    interfaceConfig = await configResponse.json();
+                    window.currentInterfaceConfig = interfaceConfig; // Store globally for access
+                    console.log('Interface config loaded:', interfaceConfig);
+                }
+                
+                // Fetch interface metrics
+                const interfaceResponse = await fetch(`/api/firewall/${firewallName}/interfaces?${params}`);
+                if (interfaceResponse.ok) {
+                    const interfaceData = await interfaceResponse.json();
+                    lastFetchedInterfaceData = interfaceData;
+                    
+                    // Update available interfaces from actual data
+                    const newInterfaces = Object.keys(interfaceData);
+                    
+                    // Filter interfaces based on configuration if available
+                    let filteredInterfaces = newInterfaces;
+                    if (interfaceConfig && interfaceConfig.enabled_interfaces && interfaceConfig.enabled_interfaces.length > 0) {
+                        // Only show enabled interfaces if configuration specifies them
+                        filteredInterfaces = newInterfaces.filter(iface =>
+                            interfaceConfig.enabled_interfaces.includes(iface)
+                        );
+                        console.log(`Filtered to ${filteredInterfaces.length} enabled interfaces:`, filteredInterfaces);
+                    }
+                    
+                    if (JSON.stringify(availableInterfaces) !== JSON.stringify(filteredInterfaces)) {
+                        availableInterfaces = filteredInterfaces;
+                        updateInterfaceSelector();
+                        
+                        // Auto-select interfaces based on configuration or smart defaults
+                        if (selectedInterfaces.length === 0 && availableInterfaces.length > 0) {
+                            if (interfaceConfig && interfaceConfig.enabled_interfaces) {
+                                // Select all enabled interfaces from config
+                                selectedInterfaces = interfaceConfig.enabled_interfaces.filter(iface =>
+                                    availableInterfaces.includes(iface)
+                                );
+                            } else {
+                                // Smart selection: prioritize important interfaces
+                                const priorityInterfaces = ['ethernet1/1', 'ethernet1/2', 'ae1'];
+                                const selectedPriority = availableInterfaces.filter(iface =>
+                                    priorityInterfaces.includes(iface)
+                                );
+                                
+                                if (selectedPriority.length > 0) {
+                                    selectedInterfaces = selectedPriority;
+                                } else {
+                                    // Fallback: select first few interfaces
+                                    selectedInterfaces = availableInterfaces.slice(0, Math.min(3, availableInterfaces.length));
+                                }
+                            }
+                            updateInterfaceSelector();
+                        }
+                    }
+                } else {
+                    console.warn('Interface metrics not available');
+                    lastFetchedInterfaceData = {};
+                }
+                
+                // Fetch session statistics
+                const sessionResponse = await fetch(`/api/firewall/${firewallName}/sessions?${params}`);
+                if (sessionResponse.ok) {
+                    const sessionData = await sessionResponse.json();
+                    lastFetchedSessionStats = sessionData;
+                } else {
+                    console.warn('Session statistics not available');
+                    lastFetchedSessionStats = [];
+                }
+                
+                return {
+                    metrics: metricsData,
+                    interfaces: lastFetchedInterfaceData,
+                    sessions: lastFetchedSessionStats,
+                    interfaceConfig: interfaceConfig
+                };
+                
             } catch (error) {
-                console.error('Failed to fetch metrics:', error);
+                console.error('Failed to fetch data:', error);
                 document.getElementById('currentValues').innerHTML = '<div class="error">Failed to load data: ' + error.message + '</div>';
-                return [];
+                return { metrics: [], interfaces: {}, sessions: [], interfaceConfig: null };
             }
         }
 
-        function downloadCSV() {
-            if (!lastFetchedData || lastFetchedData.length === 0) {
-                alert('No data available to download. Please load some data first.');
+        function updateInterfaceSelector() {
+            const selector = document.getElementById('interfaceSelector');
+            if (!selector) return;
+            
+            // Preserve existing header and controls, only update buttons and info
+            let buttonsContainer = document.getElementById('interfaceButtons');
+            let infoContainer = document.getElementById('interfaceInfo');
+            
+            if (!buttonsContainer) {
+                // Create the structure if it doesn't exist
+                selector.innerHTML = `
+                    <div class="interface-selector-header">
+                        <span>Select Interfaces to Monitor:</span>
+                        <div class="interface-selector-controls">
+                            <button class="select-all-btn" onclick="selectAllInterfaces()">Select All</button>
+                            <button class="select-none-btn" onclick="selectNoInterfaces()">Select None</button>
+                        </div>
+                    </div>
+                    <input type="text" class="interface-search" id="interfaceSearch" placeholder="Search interfaces..." onkeyup="filterInterfaces()">
+                    <div id="interfaceButtons"></div>
+                    <div class="interface-info" id="interfaceInfo"></div>
+                `;
+                buttonsContainer = document.getElementById('interfaceButtons');
+                infoContainer = document.getElementById('interfaceInfo');
+            }
+            
+            buttonsContainer.innerHTML = '';
+            
+            if (availableInterfaces.length === 0) {
+                buttonsContainer.innerHTML = '<div style="color: #7f8c8d; font-style: italic; width: 100%; text-align: center; padding: 20px;">No interfaces available for monitoring</div>';
+                infoContainer.textContent = 'Interface monitoring may not be enabled for this firewall.';
                 return;
             }
-
-            const headers = [
-                'Timestamp (Local)',
-                'Timestamp (UTC)',
-                'Firewall Name',
-                'Management CPU (%)',
-                'Data Plane CPU Mean (%)',
-                'Data Plane CPU Max (%)',
-                'Data Plane CPU P95 (%)',
-                'Throughput Mean (Mbps)',
-                'Throughput Max (Mbps)',
-                'Throughput Min (Mbps)',
-                'Throughput P95 (Mbps)',
-                'PPS Mean',
-                'PPS Max',
-                'PPS Min',
-                'PPS P95',
-                'Packet Buffer (%)',
-                'Sample Count',
-                'Success Rate (%)',
-                'Sampling Period (s)',
-                'CPU User (%)',
-                'CPU System (%)',
-                'CPU Idle (%)'
-            ];
-
-            const csvRows = [headers.join(',')];
             
-            const sortedData = [...lastFetchedData].sort((a, b) =>
-                new Date(a.timestamp) - new Date(b.timestamp)
-            );
-
-            sortedData.forEach(row => {
-                const localTime = convertFromUserTimezone(row.timestamp);
-                const csvRow = [
-                    `"${localTime.toLocaleString()}"`,
-                    `"${row.timestamp}"`,
-                    `"${row.firewall_name || firewallName}"`,
-                    formatValue(row.mgmt_cpu) || '',
-                    formatValue(row.data_plane_cpu_mean) || '',
-                    formatValue(row.data_plane_cpu_max) || '',
-                    formatValue(row.data_plane_cpu_p95) || '',
-                    formatValue(row.throughput_mbps_total) || '',
-                    formatValue(row.throughput_mbps_max) || '',
-                    formatValue(row.throughput_mbps_min) || '',
-                    formatValue(row.throughput_mbps_p95) || '',
-                    formatValue(row.pps_total, 0) || '',
-                    formatValue(row.pps_max, 0) || '',
-                    formatValue(row.pps_min, 0) || '',
-                    formatValue(row.pps_p95, 0) || '',
-                    formatValue(row.pbuf_util_percent) || '',
-                    row.session_sample_count || '',
-                    formatValue((row.session_success_rate || 0) * 100, 1) || '',
-                    formatValue(row.session_sampling_period) || '',
-                    formatValue(row.cpu_user) || '',
-                    formatValue(row.cpu_system) || '',
-                    formatValue(row.cpu_idle) || ''
-                ];
-                csvRows.push(csvRow.join(','));
+            // Get interface config if available from global scope
+            let interfaceConfig = window.currentInterfaceConfig || null;
+            
+            availableInterfaces.forEach(interfaceName => {
+                const btn = document.createElement('button');
+                btn.className = 'interface-btn';
+                btn.dataset.interface = interfaceName;
+                
+                // Set display name
+                const displayName = getInterfaceDisplayName(interfaceName, interfaceConfig);
+                btn.innerHTML = `
+                    <span>${displayName}</span>
+                    <small style="display: block; font-size: 0.7em; opacity: 0.8;">${interfaceName}</small>
+                    <span class="interface-status"></span>
+                `;
+                
+                btn.onclick = () => toggleInterface(interfaceName);
+                
+                // Add visual indicators
+                if (selectedInterfaces.includes(interfaceName)) {
+                    btn.classList.add('active');
+                }
+                
+                if (hasInterfaceData(interfaceName)) {
+                    btn.classList.add('has-data');
+                    btn.title = `${displayName} (${interfaceName}) - Has data available`;
+                } else {
+                    btn.classList.add('no-data');
+                    btn.title = `${displayName} (${interfaceName}) - No data available`;
+                }
+                
+                buttonsContainer.appendChild(btn);
             });
-
-            const csvContent = csvRows.join('\n');
-
-            const now = new Date();
-            const startDate = document.getElementById('startDate').value;
-            const endDate = document.getElementById('endDate').value;
             
-            let filename = `${firewallName}_enhanced_metrics_${now.getFullYear()}${(now.getMonth()+1).toString().padStart(2,'0')}${now.getDate().toString().padStart(2,'0')}`;
+            // Update info
+            const selectedCount = selectedInterfaces.length;
+            const totalCount = availableInterfaces.length;
+            const dataCount = availableInterfaces.filter(hasInterfaceData).length;
             
-            if (startDate && endDate) {
-                filename += `_${startDate}_to_${endDate}`;
+            let infoText = `${totalCount} interfaces available, ${selectedCount} selected`;
+            if (dataCount !== totalCount) {
+                infoText += `, ${dataCount} with data`;
             }
             
-            filename += '.csv';
-
-            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-            const link = document.createElement('a');
+            infoContainer.textContent = infoText;
             
-            if (link.download !== undefined) {
-                const url = URL.createObjectURL(blob);
-                link.setAttribute('href', url);
-                link.setAttribute('download', filename);
-                link.style.visibility = 'hidden';
-                document.body.appendChild(link);
-                link.click();
-                document.body.removeChild(link);
-                
-                const originalButton = document.querySelector('button[onclick="downloadCSV()"]');
-                const originalText = originalButton.textContent;
-                originalButton.textContent = '✅ Downloaded!';
-                originalButton.style.background = '#27ae60';
-                
-                setTimeout(() => {
-                    originalButton.textContent = originalText;
-                    originalButton.style.background = '#27ae60';
-                }, 2000);
+            // Clear search when updating
+            const searchInput = document.getElementById('interfaceSearch');
+            if (searchInput) {
+                searchInput.value = '';
             }
-        }
-
-        function updateSamplingInfo(data) {
-            // This function has been modified to do nothing so the sampling info doesn't show
-            // We're keeping the function itself so other code that calls it doesn't break
-            return;
-        }
-
-        function updateThroughputLegend() {
-            if (!lastFetchedData || lastFetchedData.length === 0) return;
-            
-            let legendHtml = '';
-            
-            if (currentThroughputView === 'all') {
-                legendHtml = `
-                    <div class="legend-item">
-                        <span class="legend-color" style="background-color: #2ecc71;"></span>
-                        <span>Mean (Mbps)</span>
-                    </div>
-                    <div class="legend-item">
-                        <span class="legend-color" style="background-color: #e74c3c;"></span>
-                        <span>Max (Mbps)</span>
-                    </div>
-                    <div class="legend-item">
-                        <span class="legend-color" style="background-color: #f39c12;"></span>
-                        <span>P95 (Mbps)</span>
-                    </div>
-                    <div class="legend-item">
-                        <span class="legend-color" style="background-color: #95a5a6;"></span>
-                        <span>Min (Mbps)</span>
-                    </div>
-                `;
-            } else {
-                let label, color;
-                switch(currentThroughputView) {
-                    case 'max':
-                        label = 'Max Throughput (Mbps)';
-                        color = '#e74c3c';
-                        break;
-                    case 'min':
-                        label = 'Min Throughput (Mbps)';
-                        color = '#95a5a6';
-                        break;
-                    case 'p95':
-                        label = 'P95 Throughput (Mbps)';
-                        color = '#f39c12';
-                        break;
-                    default:
-                        label = 'Mean Throughput (Mbps)';
-                        color = '#2ecc71';
-                }
-                
-                legendHtml = `
-                    <div class="legend-item">
-                        <span class="legend-color" style="background-color: ${color};"></span>
-                        <span>${label}</span>
-                    </div>
-                `;
-            }
-            
-            document.getElementById('throughputLegend').innerHTML = legendHtml;
-        }
-
-        function updatePpsLegend() {
-            if (!lastFetchedData || lastFetchedData.length === 0) return;
-            
-            let legendHtml = '';
-            
-            if (currentPpsView === 'all') {
-                legendHtml = `
-                    <div class="legend-item">
-                        <span class="legend-color" style="background-color: #9b59b6;"></span>
-                        <span>Mean PPS</span>
-                    </div>
-                    <div class="legend-item">
-                        <span class="legend-color" style="background-color: #e74c3c;"></span>
-                        <span>Max PPS</span>
-                    </div>
-                    <div class="legend-item">
-                        <span class="legend-color" style="background-color: #f39c12;"></span>
-                        <span>P95 PPS</span>
-                    </div>
-                    <div class="legend-item">
-                        <span class="legend-color" style="background-color: #95a5a6;"></span>
-                        <span>Min PPS</span>
-                    </div>
-                `;
-            } else {
-                let label, color;
-                switch(currentPpsView) {
-                    case 'max':
-                        label = 'Max PPS';
-                        color = '#e74c3c';
-                        break;
-                    case 'min':
-                        label = 'Min PPS';
-                        color = '#95a5a6';
-                        break;
-                    case 'p95':
-                        label = 'P95 PPS';
-                        color = '#f39c12';
-                        break;
-                    default:
-                        label = 'Mean PPS';
-                        color = '#9b59b6';
-                }
-                
-                legendHtml = `
-                    <div class="legend-item">
-                        <span class="legend-color" style="background-color: ${color};"></span>
-                        <span>${label}</span>
-                    </div>
-                `;
-            }
-            
-            document.getElementById('ppsLegend').innerHTML = legendHtml;
         }
 
         function updateCurrentValues(data) {
-            if (!data || data.length === 0) return;
+            if (!data.metrics || data.metrics.length === 0) return;
             
-            const latest = data[0];
+            const latest = data.metrics[0];
             const mgmtCpu = latest.mgmt_cpu;
             
             let dpCpu;
@@ -749,6 +924,27 @@
                     dpCpu = latest.data_plane_cpu_mean;
             }
             
+            // Get latest interface data for display - only from selected interfaces
+            let totalInterfaceRx = 0;
+            let totalInterfaceTx = 0;
+            let interfaceCount = 0;
+            
+            selectedInterfaces.forEach(interfaceName => {
+                const interfaceDataArray = data.interfaces[interfaceName];
+                if (interfaceDataArray && interfaceDataArray.length > 0) {
+                    const latestInterface = interfaceDataArray[0];
+                    totalInterfaceRx += latestInterface.rx_mbps || 0;
+                    totalInterfaceTx += latestInterface.tx_mbps || 0;
+                    interfaceCount++;
+                }
+            });
+            
+            // Get latest session stats
+            let activeSessions = 0;
+            if (data.sessions && data.sessions.length > 0) {
+                activeSessions = data.sessions[0].active_sessions;
+            }
+            
             const currentValuesHtml = `
                 <div class="value-card">
                     <div class="value-label">Mgmt CPU</div>
@@ -761,24 +957,24 @@
                     <div class="value-unit">%</div>
                 </div>
                 <div class="value-card">
-                    <div class="value-label">Throughput Mean</div>
+                    <div class="value-label">Session Throughput</div>
                     <div class="value-number">${formatValue(latest.throughput_mbps_total)}</div>
                     <div class="value-unit">Mbps</div>
                 </div>
                 <div class="value-card">
-                    <div class="value-label">Throughput Max</div>
-                    <div class="value-number">${formatValue(latest.throughput_mbps_max)}</div>
+                    <div class="value-label">Interface RX (${interfaceCount} Selected)</div>
+                    <div class="value-number">${formatValue(totalInterfaceRx)}</div>
                     <div class="value-unit">Mbps</div>
                 </div>
                 <div class="value-card">
-                    <div class="value-label">PPS Mean</div>
-                    <div class="value-number">${formatValue(latest.pps_total, 0)}</div>
-                    <div class="value-unit">pps</div>
+                    <div class="value-label">Interface TX (${interfaceCount} Selected)</div>
+                    <div class="value-number">${formatValue(totalInterfaceTx)}</div>
+                    <div class="value-unit">Mbps</div>
                 </div>
                 <div class="value-card">
-                    <div class="value-label">PPS Max</div>
-                    <div class="value-number">${formatValue(latest.pps_max, 0)}</div>
-                    <div class="value-unit">pps</div>
+                    <div class="value-label">Active Sessions</div>
+                    <div class="value-number">${formatValue(activeSessions, 0)}</div>
+                    <div class="value-unit">sessions</div>
                 </div>
                 <div class="value-card">
                     <div class="value-label">Packet Buffer</div>
@@ -827,7 +1023,7 @@
                     },
                     plugins: {
                         legend: {
-                            display: false // We'll use custom legends
+                            display: false
                         }
                     },
                     interaction: {
@@ -839,6 +1035,7 @@
         }
 
         function initCharts() {
+            // CPU Chart
             charts.cpu = createChart('cpuChart', [
                 {
                     label: 'Management CPU (%)',
@@ -858,9 +1055,10 @@
                 }
             ]);
 
-            charts.throughput = createChart('throughputChart', [
+            // Session-based throughput chart
+            charts.sessionThroughput = createChart('sessionThroughputChart', [
                 {
-                    label: 'Throughput Mean (Mbps)',
+                    label: 'Session Throughput Mean (Mbps)',
                     data: [],
                     borderColor: '#2ecc71',
                     backgroundColor: '#2ecc7120',
@@ -869,6 +1067,10 @@
                 }
             ]);
 
+            // Interface chart
+            charts.interface = createChart('interfaceChart', []);
+
+            // Session-based PPS chart
             charts.pps = createChart('ppsChart', [
                 {
                     label: 'PPS Mean',
@@ -880,6 +1082,19 @@
                 }
             ]);
 
+            // Session statistics chart
+            charts.sessionStats = createChart('sessionStatsChart', [
+                {
+                    label: 'Active Sessions',
+                    data: [],
+                    borderColor: '#e67e22',
+                    backgroundColor: '#e67e2220',
+                    fill: false,
+                    tension: 0.4
+                }
+            ]);
+
+            // Packet buffer chart
             charts.pbuf = createChart('pbufChart', [
                 {
                     label: 'Packet Buffer (%)',
@@ -892,7 +1107,7 @@
             ]);
         }
 
-        function updateThroughputChart() {
+        function updateSessionThroughputChart() {
             if (!lastFetchedData || lastFetchedData.length === 0) return;
             
             const reversedData = [...lastFetchedData].reverse();
@@ -900,7 +1115,7 @@
             
             const datasets = [];
             
-            if (currentThroughputView === 'all') {
+            if (currentSessionThroughputView === 'all') {
                 datasets.push(
                     {
                         label: 'Mean (Mbps)',
@@ -937,7 +1152,7 @@
                 );
             } else {
                 let dataField, label, color;
-                switch(currentThroughputView) {
+                switch(currentSessionThroughputView) {
                     case 'max':
                         dataField = 'throughput_mbps_max';
                         label = 'Max Throughput (Mbps)';
@@ -969,9 +1184,72 @@
                 });
             }
             
-            charts.throughput.data.labels = localTimes;
-            charts.throughput.data.datasets = datasets;
-            charts.throughput.update('active');
+            charts.sessionThroughput.data.labels = localTimes;
+            charts.sessionThroughput.data.datasets = datasets;
+            charts.sessionThroughput.update('active');
+        }
+
+        function updateInterfaceChart() {
+            if (!lastFetchedInterfaceData || Object.keys(lastFetchedInterfaceData).length === 0) return;
+            
+            const datasets = [];
+            const colors = ['#e74c3c', '#3498db', '#2ecc71', '#f39c12', '#9b59b6', '#e67e22', '#1abc9c', '#34495e'];
+            let colorIndex = 0;
+            
+            selectedInterfaces.forEach(interfaceName => {
+                const interfaceData = lastFetchedInterfaceData[interfaceName];
+                if (!interfaceData || interfaceData.length === 0) return;
+                
+                const reversedData = [...interfaceData].reverse();
+                const localTimes = reversedData.map(d => convertFromUserTimezone(d.timestamp));
+                const color = colors[colorIndex % colors.length];
+                colorIndex++;
+                
+                if (currentInterfaceView === 'rx' || currentInterfaceView === 'both') {
+                    datasets.push({
+                        label: `${interfaceName} RX`,
+                        data: reversedData.map(d => d.rx_mbps || 0),
+                        borderColor: color,
+                        backgroundColor: color + '20',
+                        fill: false,
+                        tension: 0.4
+                    });
+                }
+                
+                if (currentInterfaceView === 'tx' || currentInterfaceView === 'both') {
+                    datasets.push({
+                        label: `${interfaceName} TX`,
+                        data: reversedData.map(d => d.tx_mbps || 0),
+                        borderColor: color,
+                        backgroundColor: color + '20',
+                        fill: false,
+                        tension: 0.4,
+                        borderDash: currentInterfaceView === 'both' ? [5, 5] : []
+                    });
+                }
+                
+                if (currentInterfaceView === 'total') {
+                    datasets.push({
+                        label: `${interfaceName} Total`,
+                        data: reversedData.map(d => d.total_mbps || 0),
+                        borderColor: color,
+                        backgroundColor: color + '20',
+                        fill: false,
+                        tension: 0.4
+                    });
+                }
+            });
+            
+            // Use the first interface's timestamps for the chart
+            let localTimes = [];
+            if (selectedInterfaces.length > 0 && lastFetchedInterfaceData[selectedInterfaces[0]]) {
+                const firstInterfaceData = [...lastFetchedInterfaceData[selectedInterfaces[0]]].reverse();
+                localTimes = firstInterfaceData.map(d => convertFromUserTimezone(d.timestamp));
+            }
+            
+            charts.interface.data.labels = localTimes;
+            charts.interface.data.datasets = datasets;
+            charts.interface.update('active');
         }
 
         function updatePpsChart() {
@@ -1056,10 +1334,21 @@
             charts.pps.update('active');
         }
 
-        function updateCharts(data) {
-            if (!data || data.length === 0) return;
+        function updateSessionStatsChart() {
+            if (!lastFetchedSessionStats || lastFetchedSessionStats.length === 0) return;
             
-            const reversedData = [...data].reverse();
+            const reversedData = [...lastFetchedSessionStats].reverse();
+            const localTimes = reversedData.map(d => convertFromUserTimezone(d.timestamp));
+            
+            charts.sessionStats.data.labels = localTimes;
+            charts.sessionStats.data.datasets[0].data = reversedData.map(d => d.active_sessions || 0);
+            charts.sessionStats.update('active');
+        }
+
+        function updateCharts(data) {
+            if (!data.metrics || data.metrics.length === 0) return;
+            
+            const reversedData = [...data.metrics].reverse();
             const localTimes = reversedData.map(d => convertFromUserTimezone(d.timestamp));
             
             let dpCpuData, dpCpuLabel;
@@ -1093,20 +1382,278 @@
                 charts.pbuf.update('active');
             }
             
-            // Update throughput and PPS charts
-            updateThroughputChart();
+            // Update session-based charts
+            updateSessionThroughputChart();
             updatePpsChart();
             
+            // Update interface charts
+            updateInterfaceChart();
+            
+            // Update session statistics chart
+            updateSessionStatsChart();
+            
             // Update legends
-            updateThroughputLegend();
+            updateSessionThroughputLegend();
             updatePpsLegend();
+            updateInterfaceLegend();
+        }
+
+        function updateSessionThroughputLegend() {
+            // Similar to existing legend update functions
+            const legend = document.getElementById('sessionThroughputLegend');
+            if (currentSessionThroughputView === 'all') {
+                legend.innerHTML = `
+                    <div class="legend-item">
+                        <span class="legend-color" style="background-color: #2ecc71;"></span>
+                        <span>Session Mean (Mbps)</span>
+                    </div>
+                    <div class="legend-item">
+                        <span class="legend-color" style="background-color: #e74c3c;"></span>
+                        <span>Session Max (Mbps)</span>
+                    </div>
+                    <div class="legend-item">
+                        <span class="legend-color" style="background-color: #f39c12;"></span>
+                        <span>Session P95 (Mbps)</span>
+                    </div>
+                    <div class="legend-item">
+                        <span class="legend-color" style="background-color: #95a5a6;"></span>
+                        <span>Session Min (Mbps)</span>
+                    </div>
+                `;
+            } else {
+                const labels = {
+                    mean: 'Session Mean Throughput',
+                    max: 'Session Max Throughput',
+                    min: 'Session Min Throughput',
+                    p95: 'Session P95 Throughput'
+                };
+                const colors = {
+                    mean: '#2ecc71',
+                    max: '#e74c3c',
+                    min: '#95a5a6',
+                    p95: '#f39c12'
+                };
+                legend.innerHTML = `
+                    <div class="legend-item">
+                        <span class="legend-color" style="background-color: ${colors[currentSessionThroughputView]};"></span>
+                        <span>${labels[currentSessionThroughputView]} (Mbps)</span>
+                    </div>
+                `;
+            }
+        }
+
+        function updatePpsLegend() {
+            const legend = document.getElementById('ppsLegend');
+            if (currentPpsView === 'all') {
+                legend.innerHTML = `
+                    <div class="legend-item">
+                        <span class="legend-color" style="background-color: #9b59b6;"></span>
+                        <span>Session Mean PPS</span>
+                    </div>
+                    <div class="legend-item">
+                        <span class="legend-color" style="background-color: #e74c3c;"></span>
+                        <span>Session Max PPS</span>
+                    </div>
+                    <div class="legend-item">
+                        <span class="legend-color" style="background-color: #f39c12;"></span>
+                        <span>Session P95 PPS</span>
+                    </div>
+                    <div class="legend-item">
+                        <span class="legend-color" style="background-color: #95a5a6;"></span>
+                        <span>Session Min PPS</span>
+                    </div>
+                `;
+            } else {
+                const labels = {
+                    mean: 'Session Mean PPS',
+                    max: 'Session Max PPS',
+                    min: 'Session Min PPS',
+                    p95: 'Session P95 PPS'
+                };
+                const colors = {
+                    mean: '#9b59b6',
+                    max: '#e74c3c',
+                    min: '#95a5a6',
+                    p95: '#f39c12'
+                };
+                legend.innerHTML = `
+                    <div class="legend-item">
+                        <span class="legend-color" style="background-color: ${colors[currentPpsView]};"></span>
+                        <span>${labels[currentPpsView]}</span>
+                    </div>
+                `;
+            }
+        }
+
+        function updateInterfaceLegend() {
+            const legend = document.getElementById('interfaceLegend');
+            if (selectedInterfaces.length === 0) {
+                legend.innerHTML = '<div class="legend-item">Select interfaces to view bandwidth data</div>';
+                return;
+            }
+            
+            let html = '';
+            const colors = ['#e74c3c', '#3498db', '#2ecc71', '#f39c12', '#9b59b6', '#e67e22', '#1abc9c', '#34495e'];
+            
+            selectedInterfaces.forEach((interfaceName, index) => {
+                const color = colors[index % colors.length];
+                
+                if (currentInterfaceView === 'rx') {
+                    html += `<div class="legend-item">
+                        <span class="legend-color" style="background-color: ${color};"></span>
+                        <span>${interfaceName} RX (Mbps)</span>
+                    </div>`;
+                } else if (currentInterfaceView === 'tx') {
+                    html += `<div class="legend-item">
+                        <span class="legend-color" style="background-color: ${color};"></span>
+                        <span>${interfaceName} TX (Mbps)</span>
+                    </div>`;
+                } else if (currentInterfaceView === 'total') {
+                    html += `<div class="legend-item">
+                        <span class="legend-color" style="background-color: ${color};"></span>
+                        <span>${interfaceName} Total (Mbps)</span>
+                    </div>`;
+                } else {
+                    html += `<div class="legend-item">
+                        <span class="legend-color" style="background-color: ${color};"></span>
+                        <span>${interfaceName} RX (solid) / TX (dashed)</span>
+                    </div>`;
+                }
+            });
+            
+            legend.innerHTML = html;
+        }
+
+        function downloadCSV() {
+            if (!lastFetchedData || lastFetchedData.length === 0) {
+                alert('No data available to download. Please load some data first.');
+                return;
+            }
+
+            const headers = [
+                'Timestamp (Local)',
+                'Timestamp (UTC)',
+                'Firewall Name',
+                'Management CPU (%)',
+                'Data Plane CPU Mean (%)',
+                'Data Plane CPU Max (%)',
+                'Data Plane CPU P95 (%)',
+                'Session Throughput Mean (Mbps)',
+                'Session Throughput Max (Mbps)',
+                'Session Throughput Min (Mbps)',
+                'Session Throughput P95 (Mbps)',
+                'Session PPS Mean',
+                'Session PPS Max',
+                'Session PPS Min',
+                'Session PPS P95',
+                'Packet Buffer (%)',
+                'Sample Count',
+                'Success Rate (%)',
+                'Sampling Period (s)'
+            ];
+
+            // Add interface headers
+            selectedInterfaces.forEach(interfaceName => {
+                headers.push(`${interfaceName} RX (Mbps)`);
+                headers.push(`${interfaceName} TX (Mbps)`);
+                headers.push(`${interfaceName} Total (Mbps)`);
+            });
+
+            const csvRows = [headers.join(',')];
+            
+            const sortedData = [...lastFetchedData].sort((a, b) =>
+                new Date(a.timestamp) - new Date(b.timestamp)
+            );
+
+            sortedData.forEach(row => {
+                const localTime = convertFromUserTimezone(row.timestamp);
+                const csvRow = [
+                    `"${localTime.toLocaleString()}"`,
+                    `"${row.timestamp}"`,
+                    `"${row.firewall_name || firewallName}"`,
+                    formatValue(row.mgmt_cpu) || '',
+                    formatValue(row.data_plane_cpu_mean) || '',
+                    formatValue(row.data_plane_cpu_max) || '',
+                    formatValue(row.data_plane_cpu_p95) || '',
+                    formatValue(row.throughput_mbps_total) || '',
+                    formatValue(row.throughput_mbps_max) || '',
+                    formatValue(row.throughput_mbps_min) || '',
+                    formatValue(row.throughput_mbps_p95) || '',
+                    formatValue(row.pps_total, 0) || '',
+                    formatValue(row.pps_max, 0) || '',
+                    formatValue(row.pps_min, 0) || '',
+                    formatValue(row.pps_p95, 0) || '',
+                    formatValue(row.pbuf_util_percent) || '',
+                    row.session_sample_count || '',
+                    formatValue((row.session_success_rate || 0) * 100, 1) || '',
+                    formatValue(row.session_sampling_period) || ''
+                ];
+                
+                // Add interface data
+                selectedInterfaces.forEach(interfaceName => {
+                    const interfaceData = lastFetchedInterfaceData[interfaceName];
+                    if (interfaceData && interfaceData.length > 0) {
+                        // Find matching timestamp
+                        const matchingInterface = interfaceData.find(iData =>
+                            Math.abs(new Date(iData.timestamp) - new Date(row.timestamp)) < 60000 // within 1 minute
+                        );
+                        
+                        if (matchingInterface) {
+                            csvRow.push(formatValue(matchingInterface.rx_mbps) || '');
+                            csvRow.push(formatValue(matchingInterface.tx_mbps) || '');
+                            csvRow.push(formatValue(matchingInterface.total_mbps) || '');
+                        } else {
+                            csvRow.push('', '', '');
+                        }
+                    } else {
+                        csvRow.push('', '', '');
+                    }
+                });
+                
+                csvRows.push(csvRow.join(','));
+            });
+
+            const csvContent = csvRows.join('\n');
+            const now = new Date();
+            const startDate = document.getElementById('startDate').value;
+            const endDate = document.getElementById('endDate').value;
+            
+            let filename = `${firewallName}_enhanced_metrics_${now.getFullYear()}${(now.getMonth()+1).toString().padStart(2,'0')}${now.getDate().toString().padStart(2,'0')}`;
+            
+            if (startDate && endDate) {
+                filename += `_${startDate}_to_${endDate}`;
+            }
+            
+            filename += '.csv';
+
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            const link = document.createElement('a');
+            
+            if (link.download !== undefined) {
+                const url = URL.createObjectURL(blob);
+                link.setAttribute('href', url);
+                link.setAttribute('download', filename);
+                link.style.visibility = 'hidden';
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                
+                const originalButton = document.querySelector('button[onclick="downloadCSV()"]');
+                const originalText = originalButton.textContent;
+                originalButton.textContent = '✅ Downloaded!';
+                originalButton.style.background = '#27ae60';
+                
+                setTimeout(() => {
+                    originalButton.textContent = originalText;
+                    originalButton.style.background = '#27ae60';
+                }, 2000);
+            }
         }
 
         async function refreshData() {
             const data = await fetchMetrics();
             
-            if (data && data.length > 0) {
-                updateSamplingInfo(data);
+            if (data && (data.metrics.length > 0 || Object.keys(data.interfaces).length > 0)) {
                 updateCurrentValues(data);
                 updateCharts(data);
             }

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Enhanced Web Dashboard for PAN-OS Multi-Firewall Monitor
-Fixed for proper asyncio/threading compatibility and indentation
+Enhanced Web Dashboard for PAN-OS Multi-Firewall Monitor with Interface Monitoring
+Adds interface bandwidth and session statistics monitoring alongside existing features
 """
 import asyncio
 import logging
@@ -20,10 +20,10 @@ try:
 except ImportError:
     FASTAPI_OK = False
 
-LOG = logging.getLogger("panos_monitor.web")
+LOG = logging.getLogger("panos_monitor.enhanced_web")
 
-class WebDashboard:
-    """Enhanced web dashboard for multi-firewall monitoring"""
+class EnhancedWebDashboard:
+    """Enhanced web dashboard with interface monitoring capabilities"""
     
     def __init__(self, database, config_manager, collector_manager=None):
         if not FASTAPI_OK:
@@ -32,7 +32,7 @@ class WebDashboard:
         self.database = database
         self.config_manager = config_manager
         self.collector_manager = collector_manager
-        self.app = FastAPI(title="PAN-OS Multi-Firewall Monitor")
+        self.app = FastAPI(title="Enhanced PAN-OS Multi-Firewall Monitor")
         self.server_thread = None
         self.should_stop = False
         
@@ -41,19 +41,20 @@ class WebDashboard:
         self.templates_dir.mkdir(exist_ok=True)
         self.templates = Jinja2Templates(directory=str(self.templates_dir))
         
-        self._create_templates()
-        self._setup_routes()
+        self._create_enhanced_templates()
+        self._setup_enhanced_routes()
     
-    def _create_templates(self):
-        """Create HTML templates"""
-        # Main dashboard template
+    def _create_enhanced_templates(self):
+        """Create enhanced HTML templates with interface monitoring"""
+        
+        # Enhanced main dashboard template
         dashboard_html = """
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PAN-OS Multi-Firewall Monitor</title>
+    <title>Enhanced PAN-OS Multi-Firewall Monitor</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -78,9 +79,24 @@ class WebDashboard:
             font-size: 2.2em;
             font-weight: 700;
         }
+        .enhancement-badge {
+            display: inline-block;
+            background: #e74c3c;
+            color: white;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 0.7em;
+            font-weight: bold;
+            margin-left: 10px;
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+        }
         .firewall-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+            grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
             gap: 20px;
             margin-bottom: 20px;
         }
@@ -92,6 +108,7 @@ class WebDashboard:
             backdrop-filter: blur(10px);
             border: 1px solid rgba(255,255,255,0.2);
             transition: transform 0.2s ease;
+            position: relative;
         }
         .firewall-card:hover { transform: translateY(-5px); }
         .firewall-name {
@@ -115,13 +132,9 @@ class WebDashboard:
         .status-online { background: #27ae60; animation: pulse 2s infinite; }
         .status-offline { background: #e74c3c; }
         .status-unknown { background: #95a5a6; }
-        @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.5; }
-        }
         .metrics-summary {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(80px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
             gap: 10px;
             margin: 15px 0;
         }
@@ -140,6 +153,26 @@ class WebDashboard:
             font-size: 1.1em;
             font-weight: 600;
             color: #2c3e50;
+        }
+        .enhanced-metrics {
+            background: rgba(39, 174, 96, 0.1);
+            border: 1px solid #27ae60;
+            border-radius: 8px;
+            padding: 10px;
+            margin: 10px 0;
+        }
+        .enhanced-label {
+            font-size: 0.7em;
+            color: #27ae60;
+            font-weight: bold;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 5px;
+        }
+        .interface-summary {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 8px;
         }
         .view-button {
             display: inline-block;
@@ -209,17 +242,25 @@ class WebDashboard:
 <body>
     <div class="container">
         <div class="header">
-            <h1>🔥 PAN-OS Multi-Firewall Monitor</h1>
-            <p>Real-time monitoring dashboard for multiple Palo Alto Networks firewalls</p>
+            <h1>🔥 Enhanced PAN-OS Multi-Firewall Monitor <span class="enhancement-badge">NEW</span></h1>
+            <p>Real-time monitoring with accurate interface bandwidth and session tracking</p>
         </div>
 
         {% if database_stats %}
         <div class="stats-section">
-            <h2>📊 System Statistics</h2>
+            <h2>📊 Enhanced System Statistics</h2>
             <div class="stats-grid">
                 <div class="stat-card">
                     <div class="stat-number">{{ database_stats.total_metrics }}</div>
-                    <div class="stat-label">Total Metrics</div>
+                    <div class="stat-label">Session Metrics</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">{{ database_stats.interface_metrics_count or 0 }}</div>
+                    <div class="stat-label">Interface Metrics</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">{{ database_stats.session_statistics_count or 0 }}</div>
+                    <div class="stat-label">Session Statistics</div>
                 </div>
                 <div class="stat-card">
                     <div class="stat-number">{{ firewalls|length }}</div>
@@ -261,18 +302,58 @@ class WebDashboard:
                         </div>
                     </div>
                     <div class="metric-item">
-                        <div class="metric-label">Throughput</div>
+                        <div class="metric-label">Session Tput</div>
                         <div class="metric-value">
                             {{ "%.0f"|format(firewall.latest_metrics.throughput_mbps_total or 0) }} Mbps
                         </div>
                     </div>
                     <div class="metric-item">
-                        <div class="metric-label">PPS</div>
+                        <div class="metric-label">Session PPS</div>
                         <div class="metric-value">
                             {{ "{:,.0f}".format(firewall.latest_metrics.pps_total or 0) }}
                         </div>
                     </div>
                 </div>
+                
+                {% if firewall.interface_summary %}
+                <div class="enhanced-metrics">
+                    <div class="enhanced-label">Interface Bandwidth (Accurate) - {{ firewall.interface_summary.interface_count }} Monitored</div>
+                    <div class="interface-summary">
+                        <div class="metric-item">
+                            <div class="metric-label">Total RX</div>
+                            <div class="metric-value">{{ "%.1f"|format(firewall.interface_summary.total_rx or 0) }} Mbps</div>
+                        </div>
+                        <div class="metric-item">
+                            <div class="metric-label">Total TX</div>
+                            <div class="metric-value">{{ "%.1f"|format(firewall.interface_summary.total_tx or 0) }} Mbps</div>
+                        </div>
+                    </div>
+                    {% if firewall.interface_summary.monitored_interfaces %}
+                    <div style="font-size: 0.8em; color: #27ae60; margin-top: 5px;">
+                        Monitoring: {{ firewall.interface_summary.monitored_interfaces|join(", ") }}
+                        {% if firewall.interface_summary.total_interfaces > firewall.interface_summary.interface_count %}
+                        + {{ firewall.interface_summary.total_interfaces - firewall.interface_summary.interface_count }} more
+                        {% endif %}
+                    </div>
+                    {% endif %}
+                </div>
+                {% endif %}
+                
+                {% if firewall.session_summary %}
+                <div class="enhanced-metrics">
+                    <div class="enhanced-label">Session Statistics</div>
+                    <div class="interface-summary">
+                        <div class="metric-item">
+                            <div class="metric-label">Active Sessions</div>
+                            <div class="metric-value">{{ "{:,}".format(firewall.session_summary.active_sessions or 0) }}</div>
+                        </div>
+                        <div class="metric-item">
+                            <div class="metric-label">Utilization</div>
+                            <div class="metric-value">{{ "%.1f"|format(firewall.session_summary.session_utilization or 0) }}%</div>
+                        </div>
+                    </div>
+                </div>
+                {% endif %}
                 
                 <p style="font-size: 0.8em; color: #7f8c8d; margin: 10px 0;">
                     Last updated: {{ firewall.last_update }}
@@ -282,7 +363,7 @@ class WebDashboard:
                 {% endif %}
                 
                 <a href="/firewall/{{ firewall.name }}" class="view-button">
-                    📊 View Details
+                    📊 View Enhanced Details
                 </a>
             </div>
             {% endfor %}
@@ -292,14 +373,14 @@ class WebDashboard:
         <div class="stats-section">
             <div class="no-firewalls">
                 <h2>No Firewalls Configured</h2>
-                <p>Add firewall configurations to start monitoring.</p>
+                <p>Add firewall configurations to start enhanced monitoring.</p>
             </div>
         </div>
         {% endif %}
     </div>
 
     <script>
-        // Auto-refresh every 60 seconds
+        // Auto-refresh every 30 seconds for enhanced monitoring
         setTimeout(() => {
             window.location.reload();
         }, 30000);
@@ -308,769 +389,38 @@ class WebDashboard:
 </html>
         """
         
-        # Firewall detail template - FULL VERSION
-        firewall_detail_html = """
+        # Load the enhanced firewall detail template from the file we created
+        try:
+            with open('/mnt/user-data/outputs/enhanced_firewall_detail.html', 'r') as f:
+                firewall_detail_html = f.read()
+        except FileNotFoundError:
+            # Fallback basic template if file not found
+            firewall_detail_html = """
 <!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{{ firewall_name }} - PAN-OS Monitor</title>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@2.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            color: #333;
-        }
-        .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
-        .header {
-            background: rgba(255,255,255,0.95);
-            border-radius: 15px;
-            padding: 25px;
-            margin-bottom: 20px;
-            box-shadow: 0 8px 32px rgba(0,0,0,0.1);
-            backdrop-filter: blur(10px);
-        }
-        .header h1 {
-            color: #2c3e50;
-            margin-bottom: 10px;
-            font-size: 2.2em;
-            font-weight: 700;
-        }
-        .breadcrumb {
-            margin-bottom: 15px;
-        }
-        .breadcrumb a {
-            color: #3498db;
-            text-decoration: none;
-        }
-        .breadcrumb a:hover { text-decoration: underline; }
-        .controls {
-            background: rgba(255,255,255,0.95);
-            border-radius: 12px;
-            padding: 20px;
-            margin-bottom: 20px;
-            display: flex;
-            gap: 20px;
-            align-items: center;
-            flex-wrap: wrap;
-            box-shadow: 0 4px 16px rgba(0,0,0,0.1);
-        }
-        .control-group {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-        .control-group label {
-            font-weight: 500;
-            color: #2c3e50;
-        }
-        .control-group input, .control-group select {
-            padding: 8px 12px;
-            border: 1px solid #bdc3c7;
-            border-radius: 5px;
-            background: white;
-        }
-        button {
-            padding: 10px 20px;
-            background: #3498db;
-            color: white;
-            border: none;
-            border-radius: 5px;
-            cursor: pointer;
-            font-weight: 500;
-        }
-        button:hover { background: #2980b9; }
-        .current-values {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 15px;
-            margin-bottom: 20px;
-        }
-        .value-card {
-            background: rgba(255,255,255,0.95);
-            border-radius: 12px;
-            padding: 20px;
-            text-align: center;
-            box-shadow: 0 4px 16px rgba(0,0,0,0.1);
-            backdrop-filter: blur(10px);
-            border: 1px solid rgba(255,255,255,0.2);
-            transition: transform 0.2s ease;
-        }
-        .value-card:hover { transform: translateY(-2px); }
-        .value-label {
-            font-size: 0.9em;
-            color: #7f8c8d;
-            margin-bottom: 8px;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-        .value-number {
-            font-size: 2em;
-            font-weight: 700;
-            margin-bottom: 5px;
-        }
-        .value-unit {
-            font-size: 0.9em;
-            color: #95a5a6;
-            font-weight: 500;
-        }
-        .cpu-high { color: #e74c3c; }
-        .cpu-medium { color: #f39c12; }
-        .cpu-low { color: #27ae60; }
-        .metrics-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
-            gap: 20px;
-            margin-bottom: 20px;
-        }
-        .metric-card {
-            background: rgba(255,255,255,0.95);
-            border-radius: 15px;
-            padding: 20px;
-            box-shadow: 0 8px 32px rgba(0,0,0,0.1);
-            backdrop-filter: blur(10px);
-            border: 1px solid rgba(255,255,255,0.2);
-        }
-        .metric-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 15px;
-        }
-        .metric-title {
-            font-size: 1.3em;
-            font-weight: 600;
-            color: #2c3e50;
-        }
-        .chart-container {
-            position: relative;
-            height: 300px;
-            margin-top: 10px;
-        }
-        .timestamp {
-            font-size: 0.9em;
-            color: #7f8c8d;
-            margin-top: 10px;
-            text-align: center;
-        }
-        .loading {
-            text-align: center;
-            padding: 40px;
-            color: #7f8c8d;
-        }
-        .error {
-            background: rgba(231, 76, 60, 0.1);
-            border: 1px solid #e74c3c;
-            color: #e74c3c;
-            padding: 15px;
-            border-radius: 8px;
-            margin-bottom: 20px;
-        }
-        .download-info {
-            font-size: 0.9em;
-            color: #7f8c8d;
-            margin-top: 5px;
-            font-style: italic;
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="header">
-            <div class="breadcrumb">
-                <a href="/">← Back to Dashboard</a>
-            </div>
-            <h1>🔥 {{ firewall_name }}</h1>
-            <p>{{ firewall_host }}</p>
-        </div>
-
-        <div class="controls">
-            <div class="control-group">
-                <label for="startDate">Start Date:</label>
-                <input type="date" id="startDate" value="{{ default_start_date }}">
-            </div>
-            <div class="control-group">
-                <label for="startTime">Start Time:</label>
-                <input type="time" id="startTime" value="{{ default_start_time }}">
-            </div>
-            <div class="control-group">
-                <label for="endDate">End Date:</label>
-                <input type="date" id="endDate" value="{{ default_end_date }}">
-            </div>
-            <div class="control-group">
-                <label for="endTime">End Time:</label>
-                <input type="time" id="endTime" value="{{ default_end_time }}">
-            </div>
-            <div class="control-group">
-                <label for="maxPoints">Max Points:</label>
-                <select id="maxPoints">
-                    <option value="100">100</option>
-                    <option value="500" selected>500</option>
-                    <option value="1000">1000</option>
-                    <option value="5000">5000</option>
-                    <option value="">All</option>
-                </select>
-            </div>
-            <div class="control-group">
-                <label for="cpuAggregation">DP CPU View:</label>
-                <select id="cpuAggregation">
-                    <option value="mean" selected>Mean (Average)</option>
-                    <option value="max">Max (Hottest Core)</option>
-                    <option value="p95">P95 (95th Percentile)</option>
-                </select>
-            </div>
-            <button onclick="refreshData()">Update Charts</button>
-            <button onclick="downloadCSV()" style="background: #27ae60;">📥 Download CSV</button>
-            <div class="control-group">
-                <input type="checkbox" id="autoRefresh" checked>
-                <label for="autoRefresh">Auto Refresh (60s)</label>
-            </div>
-        </div>
-        
-        <div class="download-info">
-            💡 Tip: Use the date/time filters above, then click "Update Charts" to load data, then "Download CSV" to export the filtered results.
-        </div>
-
-        <div class="current-values" id="currentValues">
-            <!-- Current values will be populated by JavaScript -->
-        </div>
-
-        <div class="metrics-grid">
-            <div class="metric-card">
-                <div class="metric-header">
-                    <span class="metric-title">🖥️ CPU Usage</span>
-                </div>
-                <div class="chart-container">
-                    <canvas id="cpuChart"></canvas>
-                </div>
-            </div>
-
-            <div class="metric-card">
-                <div class="metric-header">
-                    <span class="metric-title">🚀 Network Throughput</span>
-                </div>
-                <div class="chart-container">
-                    <canvas id="throughputChart"></canvas>
-                </div>
-            </div>
-
-            <div class="metric-card">
-                <div class="metric-header">
-                    <span class="metric-title">📦 Packet Buffer</span>
-                </div>
-                <div class="chart-container">
-                    <canvas id="pbufChart"></canvas>
-                </div>
-            </div>
-
-            <div class="metric-card">
-                <div class="metric-header">
-                    <span class="metric-title">📊 Packets per Second</span>
-                </div>
-                <div class="chart-container">
-                    <canvas id="ppsChart"></canvas>
-                </div>
-            </div>
-        </div>
-
-        <div class="timestamp" id="lastUpdate"></div>
-    </div>
-
-    <script>
-        const firewallName = '{{ firewall_name }}';
-        let charts = {};
-        let autoRefreshEnabled = true;
-        let refreshInterval;
-        let userTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-        let currentCpuAggregation = 'mean';
-        let lastFetchedData = []; // Store the last fetched data for CSV download
-
-        console.log('User timezone detected:', userTimezone);
-
-        function formatValue(value, decimals = 1) {
-            if (value === null || value === undefined) return '--';
-            return typeof value === 'number' ? value.toFixed(decimals) : value;
-        }
-
-        function formatTimestamp(timestamp) {
-            if (!timestamp) return '--';
-            const date = new Date(timestamp);
-            // Format in user's local timezone
-            return date.toLocaleString();
-        }
-
-        function getCpuClass(value) {
-            if (value === null || value === undefined) return 'cpu-low';
-            if (value > 80) return 'cpu-high';
-            if (value > 60) return 'cpu-medium';
-            return 'cpu-low';
-        }
-
-        function convertToUserTimezone(utcDatetimeLocal) {
-            // Convert user's local datetime input to UTC for the API
-            // The input is already in user's local time, so we need to convert it to UTC
-            const localDate = new Date(utcDatetimeLocal);
-            return localDate.toISOString();
-        }
-
-        function convertFromUserTimezone(utcDatetime) {
-            // Convert UTC datetime from API to user's local time for display
-            return new Date(utcDatetime);
-        }
-
-        async function fetchMetrics() {
-            const startDate = document.getElementById('startDate').value;
-            const startTime = document.getElementById('startTime').value;
-            const endDate = document.getElementById('endDate').value;
-            const endTime = document.getElementById('endTime').value;
-            const maxPoints = document.getElementById('maxPoints').value;
-
-            const params = new URLSearchParams();
-            
-            // Convert user's local time to UTC for the API
-            if (startDate && startTime) {
-                const localStart = `${startDate}T${startTime}:00`;
-                const utcStart = convertToUserTimezone(localStart);
-                params.append('start_time', utcStart);
-            }
-            if (endDate && endTime) {
-                const localEnd = `${endDate}T${endTime}:59`;
-                const utcEnd = convertToUserTimezone(localEnd);
-                params.append('end_time', utcEnd);
-            }
-            if (maxPoints) {
-                params.append('limit', maxPoints);
-            }
-            
-            // Add user timezone info
-            params.append('user_timezone', userTimezone);
-
-            console.log('Fetching with params:', params.toString());
-
-            try {
-                const response = await fetch(`/api/firewall/${firewallName}/metrics?${params}`);
-                if (!response.ok) {
-                    throw new Error(`HTTP ${response.status}`);
-                }
-                const data = await response.json();
-                console.log('API Response:', data.length, 'records');
-                if (data.length > 0) {
-                    console.log('Sample timestamp (UTC):', data[0].timestamp);
-                    console.log('Sample timestamp (Local):', formatTimestamp(data[0].timestamp));
-                }
-                
-                // Store data for CSV download
-                lastFetchedData = data;
-                
-                return data;
-            } catch (error) {
-                console.error('Failed to fetch metrics:', error);
-                document.getElementById('currentValues').innerHTML = '<div class="error">Failed to load data: ' + error.message + '</div>';
-                return [];
-            }
-        }
-
-        function downloadCSV() {
-            if (!lastFetchedData || lastFetchedData.length === 0) {
-                alert('No data available to download. Please load some data first.');
-                return;
-            }
-
-            console.log('Preparing CSV download for', lastFetchedData.length, 'records');
-
-            // Prepare CSV headers
-            const headers = [
-                'Timestamp (Local)',
-                'Timestamp (UTC)',
-                'Firewall Name',
-                'Management CPU (%)',
-                'Data Plane CPU Mean (%)',
-                'Data Plane CPU Max (%)',
-                'Data Plane CPU P95 (%)',
-                'Throughput (Mbps)',
-                'Packets per Second',
-                'Packet Buffer (%)',
-                'CPU User (%)',
-                'CPU System (%)',
-                'CPU Idle (%)'
-            ];
-
-            // Prepare CSV rows
-            const csvRows = [headers.join(',')];
-            
-            // Sort data by timestamp (oldest first for CSV)
-            const sortedData = [...lastFetchedData].sort((a, b) => 
-                new Date(a.timestamp) - new Date(b.timestamp)
-            );
-
-            sortedData.forEach(row => {
-                const localTime = convertFromUserTimezone(row.timestamp);
-                const csvRow = [
-                    `"${localTime.toLocaleString()}"`,  // Local time
-                    `"${row.timestamp}"`,               // UTC time
-                    `"${row.firewall_name || firewallName}"`,
-                    formatValue(row.mgmt_cpu) || '',
-                    formatValue(row.data_plane_cpu_mean) || '',
-                    formatValue(row.data_plane_cpu_max) || '',
-                    formatValue(row.data_plane_cpu_p95) || '',
-                    formatValue(row.throughput_mbps_total) || '',
-                    formatValue(row.pps_total, 0) || '',
-                    formatValue(row.pbuf_util_percent) || '',
-                    formatValue(row.cpu_user) || '',
-                    formatValue(row.cpu_system) || '',
-                    formatValue(row.cpu_idle) || ''
-                ];
-                csvRows.push(csvRow.join(','));
-            });
-
-            // Create CSV content
-            const csvContent = csvRows.join('\\n');
-
-            // Generate filename with current timestamp and date range
-            const now = new Date();
-            const startDate = document.getElementById('startDate').value;
-            const endDate = document.getElementById('endDate').value;
-            
-            let filename = `${firewallName}_metrics_${now.getFullYear()}${(now.getMonth()+1).toString().padStart(2,'0')}${now.getDate().toString().padStart(2,'0')}`;
-            
-            if (startDate && endDate) {
-                filename += `_${startDate}_to_${endDate}`;
-            }
-            
-            filename += '.csv';
-
-            // Create and trigger download
-            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-            const link = document.createElement('a');
-            
-            if (link.download !== undefined) {
-                const url = URL.createObjectURL(blob);
-                link.setAttribute('href', url);
-                link.setAttribute('download', filename);
-                link.style.visibility = 'hidden';
-                document.body.appendChild(link);
-                link.click();
-                document.body.removeChild(link);
-                
-                console.log('CSV download triggered:', filename);
-                
-                // Show success message
-                const originalButton = document.querySelector('button[onclick="downloadCSV()"]');
-                const originalText = originalButton.textContent;
-                originalButton.textContent = '✅ Downloaded!';
-                originalButton.style.background = '#27ae60';
-                
-                setTimeout(() => {
-                    originalButton.textContent = originalText;
-                    originalButton.style.background = '#27ae60';
-                }, 2000);
-            } else {
-                alert('CSV download is not supported in this browser.');
-            }
-        }
-
-        function updateCurrentValues(data) {
-            if (!data || data.length === 0) return;
-            
-            const latest = data[0]; // Data is sorted newest first
-            const mgmtCpu = latest.mgmt_cpu;
-            
-            // Use selected aggregation method for DP CPU
-            let dpCpu;
-            switch(currentCpuAggregation) {
-                case 'max':
-                    dpCpu = latest.data_plane_cpu_max;
-                    break;
-                case 'p95':
-                    dpCpu = latest.data_plane_cpu_p95;
-                    break;
-                default:
-                    dpCpu = latest.data_plane_cpu_mean;
-            }
-            
-            const throughput = latest.throughput_mbps_total;
-            const pps = latest.pps_total;
-            const pbuf = latest.pbuf_util_percent;
-
-            const currentValuesHtml = `
-                <div class="value-card">
-                    <div class="value-label">Management CPU</div>
-                    <div class="value-number ${getCpuClass(mgmtCpu)}">${formatValue(mgmtCpu)}</div>
-                    <div class="value-unit">%</div>
-                </div>
-                <div class="value-card">
-                    <div class="value-label">Data Plane CPU (${currentCpuAggregation.toUpperCase()})</div>
-                    <div class="value-number ${getCpuClass(dpCpu)}">${formatValue(dpCpu)}</div>
-                    <div class="value-unit">%</div>
-                </div>
-                <div class="value-card">
-                    <div class="value-label">Throughput</div>
-                    <div class="value-number">${formatValue(throughput)}</div>
-                    <div class="value-unit">Mbps</div>
-                </div>
-                <div class="value-card">
-                    <div class="value-label">Packets/sec</div>
-                    <div class="value-number">${formatValue(pps, 0)}</div>
-                    <div class="value-unit">pps</div>
-                </div>
-                <div class="value-card">
-                    <div class="value-label">Packet Buffer</div>
-                    <div class="value-number ${getCpuClass(pbuf)}">${formatValue(pbuf)}</div>
-                    <div class="value-unit">%</div>
-                </div>
-            `;
-            
-            document.getElementById('currentValues').innerHTML = currentValuesHtml;
-            document.getElementById('lastUpdate').textContent = `Last updated: ${formatTimestamp(latest.timestamp)}`;
-        }
-
-        function createChart(canvasId, datasets) {
-            const ctx = document.getElementById(canvasId).getContext('2d');
-            return new Chart(ctx, {
-                type: 'line',
-                data: {
-                    labels: [],
-                    datasets: datasets
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    animation: { duration: 300 },
-                    scales: {
-                        y: {
-                            beginAtZero: true,
-                            grid: { color: 'rgba(0,0,0,0.1)' },
-                            ticks: { color: '#666' }
-                        },
-                        x: {
-                            type: 'time',
-                            time: {
-                                displayFormats: {
-                                    minute: 'HH:mm',
-                                    hour: 'HH:mm',
-                                    day: 'MMM dd'
-                                }
-                            },
-                            grid: { color: 'rgba(0,0,0,0.1)' },
-                            ticks: { 
-                                color: '#666',
-                                maxTicksLimit: 10
-                            }
-                        }
-                    },
-                    plugins: {
-                        legend: {
-                            position: 'top',
-                            labels: { color: '#333' }
-                        }
-                    },
-                    interaction: {
-                        intersect: false,
-                        mode: 'index'
-                    }
-                }
-            });
-        }
-
-        function initCharts() {
-            console.log('Initializing charts...');
-            
-            charts.cpu = createChart('cpuChart', [
-                {
-                    label: 'Management CPU (%)',
-                    data: [],
-                    borderColor: '#e74c3c',
-                    backgroundColor: '#e74c3c20',
-                    fill: false,
-                    tension: 0.4
-                },
-                {
-                    label: 'Data Plane CPU - Mean (%)',
-                    data: [],
-                    borderColor: '#3498db',
-                    backgroundColor: '#3498db20',
-                    fill: false,
-                    tension: 0.4
-                }
-            ]);
-
-            charts.throughput = createChart('throughputChart', [
-                {
-                    label: 'Throughput (Mbps)',
-                    data: [],
-                    borderColor: '#2ecc71',
-                    backgroundColor: '#2ecc7120',
-                    fill: false,
-                    tension: 0.4
-                }
-            ]);
-
-            charts.pbuf = createChart('pbufChart', [
-                {
-                    label: 'Packet Buffer (%)',
-                    data: [],
-                    borderColor: '#f39c12',
-                    backgroundColor: '#f39c1220',
-                    fill: false,
-                    tension: 0.4
-                }
-            ]);
-
-            charts.pps = createChart('ppsChart', [
-                {
-                    label: 'Packets per Second',
-                    data: [],
-                    borderColor: '#9b59b6',
-                    backgroundColor: '#9b59b620',
-                    fill: false,
-                    tension: 0.4
-                }
-            ]);
-        }
-
-        function updateCharts(data) {
-            if (!data || data.length === 0) return;
-            
-            console.log('Updating charts with', data.length, 'data points');
-            
-            // Reverse data to show oldest to newest
-            const reversedData = [...data].reverse();
-            
-            // Convert UTC timestamps to user's local time for display
-            const localTimes = reversedData.map(d => convertFromUserTimezone(d.timestamp));
-            
-            let dpCpuData, dpCpuLabel;
-            switch(currentCpuAggregation) {
-                case 'max':
-                    dpCpuData = reversedData.map(d => d.data_plane_cpu_max || 0);
-                    dpCpuLabel = 'Data Plane CPU - Max (%)';
-                    break;
-                case 'p95':
-                    dpCpuData = reversedData.map(d => d.data_plane_cpu_p95 || 0);
-                    dpCpuLabel = 'Data Plane CPU - P95 (%)';
-                    break;
-                default:
-                    dpCpuData = reversedData.map(d => d.data_plane_cpu_mean || 0);
-                    dpCpuLabel = 'Data Plane CPU - Mean (%)';
-            }
-            
-            // CPU Chart
-            if (charts.cpu) {
-                charts.cpu.data.labels = localTimes;
-                charts.cpu.data.datasets[0].data = reversedData.map(d => d.mgmt_cpu || 0);
-                charts.cpu.data.datasets[1].data = dpCpuData;
-                charts.cpu.data.datasets[1].label = dpCpuLabel;
-                charts.cpu.update('active');
-            }
-            
-            // Throughput Chart
-            if (charts.throughput) {
-                charts.throughput.data.labels = localTimes;
-                charts.throughput.data.datasets[0].data = reversedData.map(d => d.throughput_mbps_total || 0);
-                charts.throughput.update('active');
-            }
-            
-            // Packet Buffer Chart
-            if (charts.pbuf) {
-                charts.pbuf.data.labels = localTimes;
-                charts.pbuf.data.datasets[0].data = reversedData.map(d => d.pbuf_util_percent || 0);
-                charts.pbuf.update('active');
-            }
-            
-            // PPS Chart
-            if (charts.pps) {
-                charts.pps.data.labels = localTimes;
-                charts.pps.data.datasets[0].data = reversedData.map(d => d.pps_total || 0);
-                charts.pps.update('active');
-            }
-        }
-
-        async function refreshData() {
-            console.log('Fetching data...');
-            const data = await fetchMetrics();
-            console.log('Data received:', data.length, 'points');
-            
-            if (data && data.length > 0) {
-                updateCurrentValues(data);
-                updateCharts(data);
-            } else {
-                console.warn('No data received');
-            }
-        }
-
-        function setupAutoRefresh() {
-            if (refreshInterval) {
-                clearInterval(refreshInterval);
-                refreshInterval = null;
-            }
-            
-            if (autoRefreshEnabled) {
-                refreshInterval = setInterval(refreshData, 60000); // 60 seconds
-            }
-        }
-
-        // Event listeners
-        document.getElementById('autoRefresh').addEventListener('change', function(e) {
-            autoRefreshEnabled = e.target.checked;
-            setupAutoRefresh();
-        });
-
-        // CPU Aggregation selector
-        document.getElementById('cpuAggregation').addEventListener('change', function(e) {
-            currentCpuAggregation = e.target.value;
-            console.log('CPU aggregation changed to:', currentCpuAggregation);
-            // Refresh the data to update charts and current values
-            refreshData();
-        });
-
-        // Initialize
-        document.addEventListener('DOMContentLoaded', function() {
-            console.log('Page loaded, initializing...');
-            initCharts();
-            refreshData();
-            setupAutoRefresh();
-        });
-
-        // Handle visibility change to pause/resume when tab is not visible
-        document.addEventListener('visibilitychange', function() {
-            if (document.hidden) {
-                if (refreshInterval) {
-                    clearInterval(refreshInterval);
-                }
-            } else {
-                setupAutoRefresh();
-            }
-        });
-    </script>
-</body>
-</html>
-        """
+<html><head><title>Enhanced Firewall Detail</title></head>
+<body><h1>Enhanced firewall detail template not found</h1></body></html>
+            """
         
         # Write templates to files
         (self.templates_dir / "dashboard.html").write_text(dashboard_html)
         (self.templates_dir / "firewall_detail.html").write_text(firewall_detail_html)
         
-        LOG.info(f"Created templates in {self.templates_dir}")
+        LOG.info(f"Created enhanced templates in {self.templates_dir}")
     
-    def _setup_routes(self):
-        """Setup FastAPI routes"""
+    def _setup_enhanced_routes(self):
+        """Setup enhanced FastAPI routes with interface monitoring"""
         
         @self.app.get("/", response_class=HTMLResponse)
-        async def dashboard(request: Request):
-            """Main dashboard showing all firewalls"""
+        async def enhanced_dashboard(request: Request):
+            """Enhanced main dashboard showing all firewalls with interface data"""
             try:
                 # Get all firewalls from database
                 db_firewalls = self.database.get_all_firewalls()
                 
-                # Get database stats
+                # Get enhanced database stats
                 database_stats = self.database.get_database_stats()
                 
-                # Prepare firewall data for template
+                # Prepare enhanced firewall data for template
                 firewalls = []
                 for fw_data in db_firewalls:
                     name = fw_data['name']
@@ -1078,6 +428,63 @@ class WebDashboard:
                     # Get latest metrics
                     latest_metrics_list = self.database.get_latest_metrics(name, 1)
                     latest_metrics = latest_metrics_list[0] if latest_metrics_list else None
+                    
+                    # Get interface summary using enhanced configuration
+                    interface_summary = None
+                    if hasattr(self.database, 'get_interface_metrics'):
+                        try:
+                            # Get available interfaces from database
+                            available_interfaces = self.database.get_available_interfaces(name)
+                            
+                            # Get firewall config to determine which interfaces should be monitored
+                            firewall_config = self.config_manager.get_firewall(name)
+                            monitored_interfaces = []
+                            
+                            if firewall_config and hasattr(firewall_config, 'should_monitor_interface'):
+                                # Use config logic to filter interfaces
+                                monitored_interfaces = [
+                                    iface for iface in available_interfaces
+                                    if firewall_config.should_monitor_interface(iface)
+                                ]
+                            else:
+                                # Fallback to all available interfaces
+                                monitored_interfaces = available_interfaces
+                            
+                            total_rx = 0
+                            total_tx = 0
+                            
+                            for interface_name in monitored_interfaces:
+                                interface_metrics = self.database.get_interface_metrics(name, interface_name, limit=1)
+                                if interface_metrics:
+                                    latest_interface = interface_metrics[0]
+                                    total_rx += latest_interface.get('rx_mbps', 0) or 0
+                                    total_tx += latest_interface.get('tx_mbps', 0) or 0
+                            
+                            if total_rx > 0 or total_tx > 0 or len(monitored_interfaces) > 0:
+                                interface_summary = {
+                                    'total_rx': total_rx,
+                                    'total_tx': total_tx,
+                                    'interface_count': len(monitored_interfaces),
+                                    'monitored_interfaces': monitored_interfaces[:3],  # Show first 3
+                                    'total_interfaces': len(available_interfaces)
+                                }
+                        except Exception as e:
+                            LOG.debug(f"Could not get enhanced interface summary for {name}: {e}")
+                    
+                    # Get session summary
+                    session_summary = None
+                    if hasattr(self.database, 'get_session_statistics'):
+                        try:
+                            session_stats = self.database.get_session_statistics(name, limit=1)
+                            if session_stats:
+                                latest_session = session_stats[0]
+                                session_summary = {
+                                    'active_sessions': latest_session.get('active_sessions', 0),
+                                    'max_sessions': latest_session.get('max_sessions', 0),
+                                    'session_utilization': (latest_session.get('active_sessions', 0) / max(latest_session.get('max_sessions', 1), 1)) * 100
+                                }
+                        except Exception as e:
+                            LOG.debug(f"Could not get session summary for {name}: {e}")
                     
                     # Determine status
                     status_class = "status-unknown"
@@ -1092,8 +499,7 @@ class WebDashboard:
                             try:
                                 last_metric_time = datetime.fromisoformat(timestamp_str)
                             except:
-                                # Fallback parsing
-                                from database import parse_iso_datetime
+                                from enhanced_database import parse_iso_datetime
                                 last_metric_time = parse_iso_datetime(timestamp_str)
                         else:
                             last_metric_time = timestamp_str
@@ -1133,6 +539,8 @@ class WebDashboard:
                         'host': fw_data['host'],
                         'status_class': status_class,
                         'latest_metrics': latest_metrics,
+                        'interface_summary': interface_summary,
+                        'session_summary': session_summary,
                         'last_update': last_update,
                         'mgmt_cpu_class': mgmt_cpu_class,
                         'dp_cpu_class': dp_cpu_class
@@ -1148,7 +556,7 @@ class WebDashboard:
                         try:
                             earliest = datetime.fromisoformat(earliest_str)
                         except:
-                            from database import parse_iso_datetime
+                            from enhanced_database import parse_iso_datetime
                             earliest = parse_iso_datetime(earliest_str)
                     else:
                         earliest = earliest_str
@@ -1166,24 +574,23 @@ class WebDashboard:
                 })
                 
             except Exception as e:
-                LOG.error(f"Dashboard error: {e}")
-                return HTMLResponse(f"<h1>Error loading dashboard</h1><p>{e}</p>", status_code=500)
+                LOG.error(f"Enhanced dashboard error: {e}")
+                return HTMLResponse(f"<h1>Error loading enhanced dashboard</h1><p>{e}</p>", status_code=500)
         
         @self.app.get("/firewall/{firewall_name}", response_class=HTMLResponse)
-        async def firewall_detail(request: Request, firewall_name: str):
-            """Detailed view for a specific firewall"""
+        async def enhanced_firewall_detail(request: Request, firewall_name: str):
+            """Enhanced detailed view for a specific firewall"""
             try:
                 # Get firewall config
                 firewall_config = self.config_manager.get_firewall(firewall_name)
                 if not firewall_config:
                     raise HTTPException(status_code=404, detail="Firewall not found")
                 
-                # Default date range and times based on user's current time
+                # Default date range and times
                 now = datetime.now()
                 end_date = now.strftime("%Y-%m-%d")
                 start_date = (now - timedelta(days=1)).strftime("%Y-%m-%d")
                 
-                # Default times - use current time range (last hour) in user's timezone
                 default_end_time = now.strftime("%H:%M")
                 default_start_time = (now - timedelta(hours=1)).strftime("%H:%M")
                 
@@ -1198,8 +605,8 @@ class WebDashboard:
                 })
                 
             except Exception as e:
-                LOG.error(f"Firewall detail error: {e}")
-                return HTMLResponse(f"<h1>Error loading firewall details</h1><p>{e}</p>", status_code=500)
+                LOG.error(f"Enhanced firewall detail error: {e}")
+                return HTMLResponse(f"<h1>Error loading enhanced firewall details</h1><p>{e}</p>", status_code=500)
         
         @self.app.get("/api/firewall/{firewall_name}/metrics")
         async def get_firewall_metrics(
@@ -1209,41 +616,179 @@ class WebDashboard:
             limit: Optional[int] = Query(500),
             user_timezone: Optional[str] = Query(None)
         ):
-            """API endpoint to get metrics for a specific firewall"""
+            """API endpoint to get metrics for a specific firewall (existing)"""
             try:
                 start_dt = None
                 end_dt = None
                 
-                # Parse timestamps safely
                 if start_time:
                     try:
-                        from database import parse_iso_datetime
+                        from enhanced_database import parse_iso_datetime
                         start_dt = parse_iso_datetime(start_time)
                     except Exception as e:
                         LOG.warning(f"Failed to parse start_time '{start_time}': {e}")
                 
                 if end_time:
                     try:
-                        from database import parse_iso_datetime
+                        from enhanced_database import parse_iso_datetime
                         end_dt = parse_iso_datetime(end_time)
                     except Exception as e:
                         LOG.warning(f"Failed to parse end_time '{end_time}': {e}")
                 
-                LOG.info(f"API Query - Firewall: {firewall_name}, Start: {start_dt}, End: {end_dt}, Limit: {limit}")
-                
                 metrics = self.database.get_metrics(firewall_name, start_dt, end_dt, limit)
-                
-                LOG.info(f"API Response - Found {len(metrics)} metrics for {firewall_name}")
-                
                 return JSONResponse(metrics)
                 
             except Exception as e:
                 LOG.error(f"API metrics error: {e}")
                 raise HTTPException(status_code=500, detail=str(e))
         
+        @self.app.get("/api/firewall/{firewall_name}/interfaces")
+        async def get_firewall_interfaces(
+            firewall_name: str,
+            start_time: Optional[str] = Query(None),
+            end_time: Optional[str] = Query(None),
+            limit: Optional[int] = Query(500),
+            user_timezone: Optional[str] = Query(None)
+        ):
+            """NEW: API endpoint to get interface metrics for a specific firewall"""
+            try:
+                if not hasattr(self.database, 'get_interface_metrics'):
+                    raise HTTPException(status_code=501, detail="Interface metrics not supported")
+                
+                start_dt = None
+                end_dt = None
+                
+                if start_time:
+                    try:
+                        from enhanced_database import parse_iso_datetime
+                        start_dt = parse_iso_datetime(start_time)
+                    except Exception as e:
+                        LOG.warning(f"Failed to parse start_time '{start_time}': {e}")
+                
+                if end_time:
+                    try:
+                        from enhanced_database import parse_iso_datetime
+                        end_dt = parse_iso_datetime(end_time)
+                    except Exception as e:
+                        LOG.warning(f"Failed to parse end_time '{end_time}': {e}")
+                
+                # Get all available interfaces for this firewall
+                available_interfaces = self.database.get_available_interfaces(firewall_name)
+                
+                # Get metrics for each interface
+                interface_data = {}
+                for interface_name in available_interfaces:
+                    metrics = self.database.get_interface_metrics(
+                        firewall_name, interface_name, start_dt, end_dt, limit
+                    )
+                    if metrics:
+                        interface_data[interface_name] = metrics
+                
+                LOG.info(f"Interface API - Found {len(interface_data)} interfaces for {firewall_name}")
+                LOG.debug(f"Interface API - Available interfaces: {available_interfaces}")
+                return JSONResponse(interface_data)
+                
+            except Exception as e:
+                LOG.error(f"API interface metrics error: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+        
+        @self.app.get("/api/firewall/{firewall_name}/interface-config")
+        async def get_firewall_interface_config(firewall_name: str):
+            """NEW: API endpoint to get interface configuration for a firewall"""
+            try:
+                # Get firewall config from config manager
+                firewall_config = self.config_manager.get_firewall(firewall_name)
+                if not firewall_config:
+                    raise HTTPException(status_code=404, detail="Firewall not found")
+                
+                # Get available interfaces from database
+                available_interfaces = []
+                if hasattr(self.database, 'get_available_interfaces'):
+                    available_interfaces = self.database.get_available_interfaces(firewall_name)
+                
+                # Get configured interfaces
+                configured_interfaces = []
+                if hasattr(firewall_config, 'interface_configs') and firewall_config.interface_configs:
+                    configured_interfaces = [
+                        {
+                            'name': ic.name,
+                            'display_name': ic.display_name,
+                            'enabled': ic.enabled,
+                            'description': ic.description
+                        }
+                        for ic in firewall_config.interface_configs
+                    ]
+                
+                # Get simple monitor list
+                monitor_interfaces = []
+                if hasattr(firewall_config, 'monitor_interfaces') and firewall_config.monitor_interfaces:
+                    monitor_interfaces = firewall_config.monitor_interfaces
+                
+                # Get enabled interfaces using firewall config logic
+                enabled_interfaces = []
+                if hasattr(firewall_config, 'get_enabled_interfaces'):
+                    enabled_interfaces = firewall_config.get_enabled_interfaces()
+                
+                config_info = {
+                    'firewall_name': firewall_name,
+                    'interface_monitoring': getattr(firewall_config, 'interface_monitoring', False),
+                    'auto_discover_interfaces': getattr(firewall_config, 'auto_discover_interfaces', False),
+                    'configured_interfaces': configured_interfaces,
+                    'monitor_interfaces': monitor_interfaces,
+                    'enabled_interfaces': enabled_interfaces,
+                    'available_interfaces': available_interfaces,
+                    'exclude_interfaces': getattr(firewall_config, 'exclude_interfaces', [])
+                }
+                
+                LOG.debug(f"Interface config for {firewall_name}: {len(enabled_interfaces)} enabled, {len(available_interfaces)} available")
+                return JSONResponse(config_info)
+                
+            except Exception as e:
+                LOG.error(f"API interface config error: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+        
+        @self.app.get("/api/firewall/{firewall_name}/sessions")
+        async def get_firewall_sessions(
+            firewall_name: str,
+            start_time: Optional[str] = Query(None),
+            end_time: Optional[str] = Query(None),
+            limit: Optional[int] = Query(500),
+            user_timezone: Optional[str] = Query(None)
+        ):
+            """NEW: API endpoint to get session statistics for a specific firewall"""
+            try:
+                if not hasattr(self.database, 'get_session_statistics'):
+                    raise HTTPException(status_code=501, detail="Session statistics not supported")
+                
+                start_dt = None
+                end_dt = None
+                
+                if start_time:
+                    try:
+                        from enhanced_database import parse_iso_datetime
+                        start_dt = parse_iso_datetime(start_time)
+                    except Exception as e:
+                        LOG.warning(f"Failed to parse start_time '{start_time}': {e}")
+                
+                if end_time:
+                    try:
+                        from enhanced_database import parse_iso_datetime
+                        end_dt = parse_iso_datetime(end_time)
+                    except Exception as e:
+                        LOG.warning(f"Failed to parse end_time '{end_time}': {e}")
+                
+                session_stats = self.database.get_session_statistics(firewall_name, start_dt, end_dt, limit)
+                
+                LOG.info(f"Session API - Found {len(session_stats)} session records for {firewall_name}")
+                return JSONResponse(session_stats)
+                
+            except Exception as e:
+                LOG.error(f"API session statistics error: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+        
         @self.app.get("/api/firewalls")
         async def get_all_firewalls():
-            """API endpoint to get all firewalls"""
+            """API endpoint to get all firewalls (existing)"""
             try:
                 firewalls = self.database.get_all_firewalls()
                 return JSONResponse(firewalls)
@@ -1252,15 +797,16 @@ class WebDashboard:
                 raise HTTPException(status_code=500, detail=str(e))
         
         @self.app.get("/api/status")
-        async def get_system_status():
-            """API endpoint to get system status"""
+        async def get_enhanced_system_status():
+            """Enhanced API endpoint to get system status"""
             try:
                 status = {
                     "database_stats": self.database.get_database_stats(),
                     "config": {
                         "firewalls": len(self.config_manager.firewalls),
                         "enabled_firewalls": len(self.config_manager.get_enabled_firewalls())
-                    }
+                    },
+                    "enhanced_monitoring": True
                 }
                 
                 if self.collector_manager:
@@ -1268,17 +814,17 @@ class WebDashboard:
                 
                 return JSONResponse(status)
             except Exception as e:
-                LOG.error(f"API status error: {e}")
+                LOG.error(f"API enhanced status error: {e}")
                 raise HTTPException(status_code=500, detail=str(e))
     
     def start_server(self, host: str = "0.0.0.0", port: int = 8080):
-        """Start the web server in a thread with proper event loop handling"""
+        """Start the enhanced web server in a thread"""
         if self.server_thread and self.server_thread.is_alive():
-            LOG.warning("Web server already running")
+            LOG.warning("Enhanced web server already running")
             return self.server_thread
         
         def run_server():
-            """Run server in thread with new event loop"""
+            """Run enhanced server in thread with new event loop"""
             try:
                 # Create new event loop for this thread
                 loop = asyncio.new_event_loop()
@@ -1297,11 +843,11 @@ class WebDashboard:
                 server = uvicorn.Server(config)
                 
                 # Run server
-                LOG.info(f"Starting web server on {host}:{port}")
+                LOG.info(f"Starting enhanced web server on {host}:{port}")
                 loop.run_until_complete(server.serve())
                 
             except Exception as e:
-                LOG.error(f"Web server failed: {e}")
+                LOG.error(f"Enhanced web server failed: {e}")
             finally:
                 # Clean up
                 try:
@@ -1312,40 +858,48 @@ class WebDashboard:
         # Start server thread
         self.server_thread = threading.Thread(
             target=run_server,
-            name="web-server",
+            name="enhanced-web-server",
             daemon=True
         )
         self.server_thread.start()
         
-        LOG.info(f"Web dashboard started at http://{host}:{port}")
+        LOG.info(f"Enhanced web dashboard started at http://{host}:{port}")
         return self.server_thread
     
     def stop_server(self):
-        """Stop the web server"""
+        """Stop the enhanced web server"""
         self.should_stop = True
         if self.server_thread and self.server_thread.is_alive():
-            LOG.info("Stopping web server...")
-            # Note: uvicorn server will stop when the main process exits
-            # For graceful shutdown, we'd need more complex signal handling
+            LOG.info("Stopping enhanced web server...")
+
+# Maintain backward compatibility
+class WebDashboard(EnhancedWebDashboard):
+    """Backward compatibility alias for the enhanced web dashboard"""
+    pass
 
 if __name__ == "__main__":
     # Example usage
-    from database import MetricsDatabase
+    from enhanced_database import EnhancedMetricsDatabase
     from config import ConfigManager
     
     # Create test database and config
-    db = MetricsDatabase("test.db")
+    db = EnhancedMetricsDatabase("test_enhanced.db")
     config_manager = ConfigManager("test_config.yaml")
     
-    # Create dashboard
-    dashboard = WebDashboard(db, config_manager)
+    # Create enhanced dashboard
+    dashboard = EnhancedWebDashboard(db, config_manager)
     
-    print("Starting test web server...")
+    print("Starting enhanced web server...")
     dashboard.start_server(port=8080)
     
     import time
     time.sleep(5)
-    print("Test server running at http://localhost:8080")
+    print("Enhanced server running at http://localhost:8080")
+    print("Features:")
+    print("- Session-based throughput monitoring (existing)")
+    print("- Accurate interface bandwidth tracking (NEW)")
+    print("- Session statistics monitoring (NEW)")
+    print("- Enhanced dashboard with interface summaries (NEW)")
     
     try:
         while True:

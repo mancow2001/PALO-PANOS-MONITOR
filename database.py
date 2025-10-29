@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """
-Database management for PAN-OS Multi-Firewall Monitor
-Provides persistent storage for metrics data using SQLite
-Enhanced with automatic schema migration for throughput and PPS statistics
-Fixed for Python 3.6 compatibility
+Enhanced Database Management for PAN-OS Multi-Firewall Monitor
+Provides persistent storage for metrics data, interface monitoring, and session statistics
+Includes automatic schema migration for interface and session data
 """
 import sqlite3
 import logging
@@ -91,8 +90,8 @@ def parse_iso_datetime_python36(timestamp_str: str) -> datetime:
 # Use the Python 3.6 compatible function
 parse_iso_datetime = parse_iso_datetime_python36
 
-class MetricsDatabase:
-    """SQLite database for storing firewall metrics with automatic schema migration"""
+class EnhancedMetricsDatabase:
+    """SQLite database for storing firewall metrics, interface data, and session statistics"""
     
     def __init__(self, db_path: str):
         self.db_path = Path(db_path)
@@ -157,13 +156,13 @@ class MetricsDatabase:
             
             conn.commit()
         
-        # Automatically migrate schema to add enhanced statistics columns
+        # Automatically migrate schema to add enhanced statistics and interface monitoring
         self._migrate_schema()
         
-        LOG.info(f"Database initialized with schema migration: {self.db_path}")
+        LOG.info(f"Enhanced database initialized with interface monitoring: {self.db_path}")
     
     def _migrate_schema(self):
-        """Automatically detect and add new columns for enhanced statistics"""
+        """Automatically detect and add new columns for enhanced statistics and interface monitoring"""
         with self._get_connection() as conn:
             # Check what columns currently exist in metrics table
             cursor = conn.execute("PRAGMA table_info(metrics)")
@@ -195,6 +194,53 @@ class MetricsDatabase:
                     except Exception as e:
                         LOG.warning(f"❌ Could not add column '{column_name}': {e}")
             
+            # Create interface metrics table
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS interface_metrics (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    firewall_name TEXT NOT NULL,
+                    interface_name TEXT NOT NULL,
+                    timestamp TIMESTAMP NOT NULL,
+                    rx_mbps REAL NOT NULL,
+                    tx_mbps REAL NOT NULL,
+                    total_mbps REAL NOT NULL,
+                    rx_pps REAL NOT NULL,
+                    tx_pps REAL NOT NULL,
+                    interval_seconds REAL NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (firewall_name) REFERENCES firewalls (name)
+                )
+            """)
+            
+            # Create session statistics table
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS session_statistics (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    firewall_name TEXT NOT NULL,
+                    timestamp TIMESTAMP NOT NULL,
+                    active_sessions INTEGER NOT NULL,
+                    max_sessions INTEGER NOT NULL,
+                    tcp_sessions INTEGER DEFAULT 0,
+                    udp_sessions INTEGER DEFAULT 0,
+                    icmp_sessions INTEGER DEFAULT 0,
+                    session_rate REAL DEFAULT 0.0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (firewall_name) REFERENCES firewalls (name)
+                )
+            """)
+            
+            # Create indexes for interface metrics
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_interface_metrics_firewall_interface_timestamp 
+                ON interface_metrics (firewall_name, interface_name, timestamp)
+            """)
+            
+            # Create indexes for session statistics
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_session_statistics_firewall_timestamp 
+                ON session_statistics (firewall_name, timestamp)
+            """)
+            
             # Commit all changes
             conn.commit()
             
@@ -202,8 +248,16 @@ class MetricsDatabase:
             if added_columns:
                 LOG.info(f"🚀 Schema migration completed: Added {len(added_columns)} new columns for enhanced statistics")
                 LOG.info(f"   New capabilities: Enhanced throughput and PPS tracking with min/max/P95 statistics")
+            
+            # Check if new tables were created
+            cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('interface_metrics', 'session_statistics')")
+            new_tables = [row[0] for row in cursor.fetchall()]
+            
+            if new_tables:
+                LOG.info(f"📊 Interface monitoring tables created: {', '.join(new_tables)}")
+                LOG.info(f"   New capabilities: Accurate interface bandwidth and session tracking")
             else:
-                LOG.debug("✅ Database schema is up to date - no migration needed")
+                LOG.debug("✅ Interface monitoring tables already exist")
     
     @contextmanager
     def _get_connection(self):
@@ -284,6 +338,164 @@ class MetricsDatabase:
             LOG.error(f"Failed to insert enhanced metrics for {firewall_name}: {e}")
             return False
     
+    def insert_interface_metrics(self, firewall_name: str, interface_metrics: Dict[str, Any]) -> bool:
+        """Insert interface metrics data"""
+        try:
+            with self._get_connection() as conn:
+                timestamp = interface_metrics.get('timestamp')
+                if isinstance(timestamp, str):
+                    timestamp = parse_iso_datetime(timestamp)
+                elif timestamp is None:
+                    timestamp = datetime.now(timezone.utc)
+                elif isinstance(timestamp, datetime) and timestamp.tzinfo is None:
+                    timestamp = timestamp.replace(tzinfo=timezone.utc)
+                
+                conn.execute("""
+                    INSERT INTO interface_metrics (
+                        firewall_name, interface_name, timestamp, rx_mbps, tx_mbps,
+                        total_mbps, rx_pps, tx_pps, interval_seconds
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    firewall_name,
+                    interface_metrics.get('interface_name'),
+                    timestamp,
+                    interface_metrics.get('rx_mbps', 0),
+                    interface_metrics.get('tx_mbps', 0),
+                    interface_metrics.get('total_mbps', 0),
+                    interface_metrics.get('rx_pps', 0),
+                    interface_metrics.get('tx_pps', 0),
+                    interface_metrics.get('interval_seconds', 0)
+                ))
+                conn.commit()
+                return True
+        except Exception as e:
+            LOG.error(f"Failed to insert interface metrics for {firewall_name}: {e}")
+            return False
+    
+    def insert_session_statistics(self, firewall_name: str, session_stats: Dict[str, Any]) -> bool:
+        """Insert session statistics data"""
+        try:
+            with self._get_connection() as conn:
+                timestamp = session_stats.get('timestamp')
+                if isinstance(timestamp, str):
+                    timestamp = parse_iso_datetime(timestamp)
+                elif timestamp is None:
+                    timestamp = datetime.now(timezone.utc)
+                elif isinstance(timestamp, datetime) and timestamp.tzinfo is None:
+                    timestamp = timestamp.replace(tzinfo=timezone.utc)
+                
+                conn.execute("""
+                    INSERT INTO session_statistics (
+                        firewall_name, timestamp, active_sessions, max_sessions,
+                        tcp_sessions, udp_sessions, icmp_sessions, session_rate
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    firewall_name,
+                    timestamp,
+                    session_stats.get('active_sessions', 0),
+                    session_stats.get('max_sessions', 0),
+                    session_stats.get('tcp_sessions', 0),
+                    session_stats.get('udp_sessions', 0),
+                    session_stats.get('icmp_sessions', 0),
+                    session_stats.get('session_rate', 0.0)
+                ))
+                conn.commit()
+                return True
+        except Exception as e:
+            LOG.error(f"Failed to insert session statistics for {firewall_name}: {e}")
+            return False
+    
+    def get_interface_metrics(self, firewall_name: str, interface_name: str = None,
+                            start_time: Optional[datetime] = None,
+                            end_time: Optional[datetime] = None,
+                            limit: Optional[int] = None) -> List[Dict[str, Any]]:
+        """Get interface metrics for a firewall"""
+        try:
+            with self._get_connection() as conn:
+                query = """
+                    SELECT * FROM interface_metrics 
+                    WHERE firewall_name = ?
+                """
+                params = [firewall_name]
+                
+                if interface_name:
+                    query += " AND interface_name = ?"
+                    params.append(interface_name)
+                
+                if start_time:
+                    query += " AND timestamp >= ?"
+                    params.append(start_time)
+                
+                if end_time:
+                    query += " AND timestamp <= ?"
+                    params.append(end_time)
+                
+                query += " ORDER BY timestamp DESC"
+                
+                if limit:
+                    query += " LIMIT ?"
+                    params.append(limit)
+                
+                cursor = conn.execute(query, params)
+                rows = cursor.fetchall()
+                
+                return [dict(row) for row in rows]
+        except Exception as e:
+            LOG.error(f"Failed to get interface metrics for {firewall_name}: {e}")
+            return []
+    
+    def get_session_statistics(self, firewall_name: str,
+                             start_time: Optional[datetime] = None,
+                             end_time: Optional[datetime] = None,
+                             limit: Optional[int] = None) -> List[Dict[str, Any]]:
+        """Get session statistics for a firewall"""
+        try:
+            with self._get_connection() as conn:
+                query = """
+                    SELECT * FROM session_statistics 
+                    WHERE firewall_name = ?
+                """
+                params = [firewall_name]
+                
+                if start_time:
+                    query += " AND timestamp >= ?"
+                    params.append(start_time)
+                
+                if end_time:
+                    query += " AND timestamp <= ?"
+                    params.append(end_time)
+                
+                query += " ORDER BY timestamp DESC"
+                
+                if limit:
+                    query += " LIMIT ?"
+                    params.append(limit)
+                
+                cursor = conn.execute(query, params)
+                rows = cursor.fetchall()
+                
+                return [dict(row) for row in rows]
+        except Exception as e:
+            LOG.error(f"Failed to get session statistics for {firewall_name}: {e}")
+            return []
+    
+    def get_available_interfaces(self, firewall_name: str) -> List[str]:
+        """Get list of available interfaces for a firewall"""
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.execute("""
+                    SELECT DISTINCT interface_name 
+                    FROM interface_metrics 
+                    WHERE firewall_name = ?
+                    ORDER BY interface_name
+                """, (firewall_name,))
+                
+                return [row[0] for row in cursor.fetchall()]
+        except Exception as e:
+            LOG.error(f"Failed to get available interfaces for {firewall_name}: {e}")
+            return []
+    
+    # Include all original methods from the base database class
     def get_metrics(self, firewall_name: str, start_time: Optional[datetime] = None,
                    end_time: Optional[datetime] = None, limit: Optional[int] = None) -> List[Dict[str, Any]]:
         """Retrieve metrics for a firewall within time range"""
@@ -312,7 +524,6 @@ class MetricsDatabase:
                 cursor = conn.execute(query, params)
                 rows = cursor.fetchall()
                 
-                # Convert to list of dictionaries
                 return [dict(row) for row in rows]
         except Exception as e:
             LOG.error(f"Failed to retrieve metrics for {firewall_name}: {e}")
@@ -340,97 +551,8 @@ class MetricsDatabase:
             LOG.error(f"Failed to retrieve firewalls: {e}")
             return []
     
-    def get_firewall_summary(self, firewall_name: str) -> Optional[Dict[str, Any]]:
-        """Get enhanced summary statistics for a firewall"""
-        try:
-            with self._get_connection() as conn:
-                cursor = conn.execute("""
-                    SELECT 
-                        COUNT(*) as total_metrics,
-                        MIN(timestamp) as first_metric,
-                        MAX(timestamp) as last_metric,
-                        AVG(mgmt_cpu) as avg_mgmt_cpu,
-                        AVG(data_plane_cpu_mean) as avg_dp_cpu_mean,
-                        AVG(data_plane_cpu_max) as avg_dp_cpu_max,
-                        AVG(data_plane_cpu_p95) as avg_dp_cpu_p95,
-                        AVG(throughput_mbps_total) as avg_throughput,
-                        MAX(throughput_mbps_total) as max_throughput,
-                        AVG(throughput_mbps_max) as avg_throughput_max,
-                        MAX(throughput_mbps_max) as peak_throughput_max,
-                        AVG(throughput_mbps_p95) as avg_throughput_p95,
-                        AVG(pps_total) as avg_pps,
-                        MAX(pps_total) as max_pps,
-                        AVG(pps_max) as avg_pps_max,
-                        MAX(pps_max) as peak_pps_max,
-                        AVG(pps_p95) as avg_pps_p95,
-                        AVG(session_sample_count) as avg_sample_count,
-                        AVG(session_success_rate) as avg_success_rate,
-                        AVG(pbuf_util_percent) as avg_pbuf_util
-                    FROM metrics 
-                    WHERE firewall_name = ?
-                """, (firewall_name,))
-                
-                row = cursor.fetchone()
-                return dict(row) if row else None
-        except Exception as e:
-            LOG.error(f"Failed to get enhanced summary for {firewall_name}: {e}")
-            return None
-    
-    def cleanup_old_metrics(self, days_to_keep: int = 30) -> int:
-        """Remove metrics older than specified days"""
-        try:
-            cutoff_time = datetime.now(timezone.utc) - timedelta(days=days_to_keep)
-            
-            with self._get_connection() as conn:
-                cursor = conn.execute("""
-                    DELETE FROM metrics 
-                    WHERE timestamp < ?
-                """, (cutoff_time,))
-                deleted_count = cursor.rowcount
-                conn.commit()
-                
-                if deleted_count > 0:
-                    LOG.info(f"Cleaned up {deleted_count} old metrics (older than {days_to_keep} days)")
-                
-                return deleted_count
-        except Exception as e:
-            LOG.error(f"Failed to cleanup old metrics: {e}")
-            return 0
-    
-    def get_metrics_for_date_range(self, firewall_name: str, start_date: str,
-                                  end_date: str) -> List[Dict[str, Any]]:
-        """Get metrics for a specific date range (YYYY-MM-DD format)"""
-        try:
-            start_dt = parse_iso_datetime(f"{start_date}T00:00:00+00:00")
-            end_dt = parse_iso_datetime(f"{end_date}T23:59:59+00:00")
-            return self.get_metrics(firewall_name, start_dt, end_dt)
-        except Exception as e:
-            LOG.error(f"Failed to get metrics for date range: {e}")
-            return []
-    
-    def export_metrics_to_dict(self, firewall_name: str, start_time: Optional[datetime] = None,
-                              end_time: Optional[datetime] = None) -> List[Dict[str, Any]]:
-        """Export enhanced metrics to dictionary format suitable for pandas/CSV"""
-        metrics = self.get_metrics(firewall_name, start_time, end_time)
-        
-        # Convert timestamps to ISO format strings for export
-        for metric in metrics:
-            if 'timestamp' in metric and metric['timestamp']:
-                if isinstance(metric['timestamp'], str):
-                    # Already a string, ensure it's ISO format
-                    try:
-                        dt = parse_iso_datetime(metric['timestamp'])
-                        metric['timestamp'] = dt.isoformat()
-                    except:
-                        pass  # Keep original if parsing fails
-                else:
-                    # Convert datetime to ISO string
-                    metric['timestamp'] = metric['timestamp'].isoformat()
-        
-        return metrics
-    
     def get_database_stats(self) -> Dict[str, Any]:
-        """Get enhanced database statistics"""
+        """Get enhanced database statistics including interface data"""
         try:
             with self._get_connection() as conn:
                 # Get total metrics count
@@ -452,153 +574,132 @@ class MetricsDatabase:
                 """)
                 date_range = cursor.fetchone()
                 
-                # Get enhanced sampling statistics
-                cursor = conn.execute("""
-                    SELECT 
-                        AVG(session_sample_count) as avg_samples,
-                        AVG(session_success_rate) as avg_success_rate,
-                        AVG(session_sampling_period) as avg_sampling_period
-                    FROM metrics 
-                    WHERE session_sample_count IS NOT NULL
-                """)
-                sampling_stats = cursor.fetchone()
+                # Get interface metrics count
+                cursor = conn.execute("SELECT COUNT(*) as interface_metrics FROM interface_metrics")
+                interface_metrics_count = cursor.fetchone()['interface_metrics']
+                
+                # Get session statistics count
+                cursor = conn.execute("SELECT COUNT(*) as session_stats FROM session_statistics")
+                session_stats_count = cursor.fetchone()['session_stats']
                 
                 # Get database file size
                 db_size = self.db_path.stat().st_size if self.db_path.exists() else 0
                 
                 stats = {
                     'total_metrics': total_metrics,
+                    'interface_metrics_count': interface_metrics_count,
+                    'session_statistics_count': session_stats_count,
                     'firewall_counts': firewall_counts,
                     'earliest_metric': date_range['earliest'],
                     'latest_metric': date_range['latest'],
                     'database_size_bytes': db_size,
-                    'database_size_mb': round(db_size / (1024 * 1024), 2)
+                    'database_size_mb': round(db_size / (1024 * 1024), 2),
+                    'enhanced_monitoring_available': True
                 }
-                
-                # Add enhanced sampling statistics if available
-                if sampling_stats and sampling_stats['avg_samples']:
-                    stats.update({
-                        'avg_samples_per_poll': round(sampling_stats['avg_samples'] or 0, 1),
-                        'avg_success_rate_percent': round((sampling_stats['avg_success_rate'] or 0) * 100, 1),
-                        'avg_sampling_period_seconds': round(sampling_stats['avg_sampling_period'] or 0, 1),
-                        'enhanced_statistics_available': True
-                    })
-                else:
-                    stats['enhanced_statistics_available'] = False
                 
                 return stats
         except Exception as e:
             LOG.error(f"Failed to get enhanced database stats: {e}")
             return {}
     
-    def set_config_value(self, key: str, value: Any):
-        """Store a configuration value"""
+    def cleanup_old_metrics(self, days_to_keep: int = 30) -> int:
+        """Remove metrics older than specified days from all tables"""
         try:
+            cutoff_time = datetime.now(timezone.utc) - timedelta(days=days_to_keep)
+            total_deleted = 0
+            
             with self._get_connection() as conn:
-                conn.execute("""
-                    INSERT OR REPLACE INTO configuration (key, value, updated_at)
-                    VALUES (?, ?, CURRENT_TIMESTAMP)
-                """, (key, json.dumps(value)))
+                # Clean main metrics
+                cursor = conn.execute("DELETE FROM metrics WHERE timestamp < ?", (cutoff_time,))
+                deleted_metrics = cursor.rowcount
+                
+                # Clean interface metrics
+                cursor = conn.execute("DELETE FROM interface_metrics WHERE timestamp < ?", (cutoff_time,))
+                deleted_interface = cursor.rowcount
+                
+                # Clean session statistics
+                cursor = conn.execute("DELETE FROM session_statistics WHERE timestamp < ?", (cutoff_time,))
+                deleted_sessions = cursor.rowcount
+                
                 conn.commit()
+                
+                total_deleted = deleted_metrics + deleted_interface + deleted_sessions
+                
+                if total_deleted > 0:
+                    LOG.info(f"Cleaned up {deleted_metrics} metrics, {deleted_interface} interface records, "
+                           f"{deleted_sessions} session records (older than {days_to_keep} days)")
+                
+                return total_deleted
         except Exception as e:
-            LOG.error(f"Failed to set config value {key}: {e}")
+            LOG.error(f"Failed to cleanup old data: {e}")
+            return 0
     
-    def get_config_value(self, key: str, default: Any = None) -> Any:
-        """Retrieve a configuration value"""
-        try:
-            with self._get_connection() as conn:
-                cursor = conn.execute("""
-                    SELECT value FROM configuration WHERE key = ?
-                """, (key,))
-                row = cursor.fetchone()
-                if row:
-                    return json.loads(row['value'])
-                return default
-        except Exception as e:
-            LOG.error(f"Failed to get config value {key}: {e}")
-            return default
+    def export_metrics_to_dict(self, firewall_name: str, start_time: Optional[datetime] = None,
+                              end_time: Optional[datetime] = None) -> List[Dict[str, Any]]:
+        """Export enhanced metrics to dictionary format suitable for pandas/CSV"""
+        metrics = self.get_metrics(firewall_name, start_time, end_time)
+        
+        # Convert timestamps to ISO format strings for export
+        for metric in metrics:
+            if 'timestamp' in metric and metric['timestamp']:
+                if isinstance(metric['timestamp'], str):
+                    # Already a string, ensure it's ISO format
+                    try:
+                        dt = parse_iso_datetime(metric['timestamp'])
+                        metric['timestamp'] = dt.isoformat()
+                    except:
+                        pass  # Keep original if parsing fails
+                else:
+                    # Convert datetime to ISO string
+                    metric['timestamp'] = metric['timestamp'].isoformat()
+        
+        return metrics
 
-# Database utility functions
-def create_database(db_path: str) -> MetricsDatabase:
-    """Create and initialize a new metrics database"""
-    return MetricsDatabase(db_path)
-
-def migrate_csv_to_database(csv_file: str, db: MetricsDatabase, firewall_name: str):
-    """Migrate existing CSV data to database"""
-    try:
-        import pandas as pd
-        
-        df = pd.read_csv(csv_file)
-        LOG.info(f"Migrating {len(df)} records from {csv_file} to database")
-        
-        # Register firewall first
-        db.register_firewall(firewall_name, "migrated_from_csv")
-        
-        # Convert and insert each row
-        for _, row in df.iterrows():
-            metrics = row.to_dict()
-            db.insert_metrics(firewall_name, metrics)
-        
-        LOG.info(f"Successfully migrated {len(df)} records for {firewall_name}")
-        
-    except Exception as e:
-        LOG.error(f"Failed to migrate CSV to database: {e}")
+# Maintain backward compatibility
+class MetricsDatabase(EnhancedMetricsDatabase):
+    """Backward compatibility alias for the enhanced database"""
+    pass
 
 if __name__ == "__main__":
-    # Example usage demonstrating automatic migration
-    db = MetricsDatabase("test_enhanced_metrics.db")
+    # Example usage demonstrating interface monitoring
+    db = EnhancedMetricsDatabase("test_enhanced_interface_metrics.db")
     
     # Register a firewall
     db.register_firewall("test_fw", "https://192.168.1.1")
     
-    # Insert enhanced test metrics
-    import time
-    for i in range(3):
-        enhanced_metrics = {
-            'timestamp': datetime.now(timezone.utc),
-            'cpu_user': 10.0 + i,
-            'cpu_system': 5.0 + i,
-            'mgmt_cpu': 15.0 + i,
-            'data_plane_cpu': 20.0 + i,
-            'data_plane_cpu_mean': 20.0 + i,
-            'data_plane_cpu_max': 25.0 + i * 2,
-            'data_plane_cpu_p95': 23.0 + i * 1.5,
-            'throughput_mbps_total': 100.0 + i * 10,
-            'throughput_mbps_max': 150.0 + i * 15,     # Enhanced
-            'throughput_mbps_min': 50.0 + i * 5,       # Enhanced
-            'throughput_mbps_p95': 130.0 + i * 12,     # Enhanced
-            'pps_total': 1000 + i * 100,
-            'pps_max': 1500 + i * 150,                 # Enhanced
-            'pps_min': 500 + i * 50,                   # Enhanced
-            'pps_p95': 1300 + i * 130,                 # Enhanced
-            'session_sample_count': 30,                # Enhanced
-            'session_success_rate': 0.95,              # Enhanced
-            'session_sampling_period': 30.0,           # Enhanced
-            'pbuf_util_percent': 2.0 + i * 0.5
-        }
-        db.insert_metrics("test_fw", enhanced_metrics)
-        time.sleep(1)
+    # Insert test interface metrics
+    interface_data = {
+        'interface_name': 'ethernet1/1',
+        'timestamp': datetime.now(timezone.utc),
+        'rx_mbps': 150.5,
+        'tx_mbps': 75.2,
+        'total_mbps': 225.7,
+        'rx_pps': 25000,
+        'tx_pps': 12500,
+        'interval_seconds': 30.0
+    }
+    db.insert_interface_metrics("test_fw", interface_data)
     
-    # Retrieve and display enhanced metrics
-    metrics = db.get_latest_metrics("test_fw", 3)
-    print(f"📊 Retrieved {len(metrics)} enhanced metrics")
-    
-    if metrics:
-        latest = metrics[0]
-        print("🚀 Latest Enhanced Metrics Sample:")
-        print(f"   Throughput: mean={latest.get('throughput_mbps_total', 'N/A')}, "
-              f"max={latest.get('throughput_mbps_max', 'N/A')}, "
-              f"p95={latest.get('throughput_mbps_p95', 'N/A')} Mbps")
-        print(f"   PPS: mean={latest.get('pps_total', 'N/A')}, "
-              f"max={latest.get('pps_max', 'N/A')}, "
-              f"p95={latest.get('pps_p95', 'N/A')}")
-        print(f"   Sample Quality: {latest.get('session_sample_count', 'N/A')} samples, "
-              f"{(latest.get('session_success_rate', 0) * 100):.1f}% success")
-    
-    # Get enhanced summary
-    summary = db.get_firewall_summary("test_fw")
-    print(f"📈 Enhanced Summary: {summary}")
+    # Insert test session statistics
+    session_data = {
+        'timestamp': datetime.now(timezone.utc),
+        'active_sessions': 15000,
+        'max_sessions': 100000,
+        'tcp_sessions': 12000,
+        'udp_sessions': 2800,
+        'icmp_sessions': 200,
+        'session_rate': 150.0
+    }
+    db.insert_session_statistics("test_fw", session_data)
     
     # Get enhanced database stats
     stats = db.get_database_stats()
-    print(f"🗄️  Enhanced Database Stats: {stats}")
+    print(f"📊 Enhanced Database Stats: {stats}")
+    
+    # Get interface metrics
+    interface_metrics = db.get_interface_metrics("test_fw", "ethernet1/1")
+    print(f"📈 Interface Metrics: {len(interface_metrics)} records")
+    
+    # Get session statistics
+    session_stats = db.get_session_statistics("test_fw")
+    print(f"🔗 Session Statistics: {len(session_stats)} records")

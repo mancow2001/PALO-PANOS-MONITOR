@@ -1,47 +1,334 @@
-# PAN-OS Multi-Firewall Monitor Configuration
-# Replace the values below with your actual firewall details
+# Enhanced PAN-OS Multi-Firewall Monitor Configuration
+# Comprehensive example showing all interface monitoring methods
+# Choose the method that best fits your environment
 
 global:
-  # Storage and output settings
-  output_dir: "/var/lib/panos-monitor/output"              # Absolute path for service
-  output_type: "CSV"                  # Export format: CSV, XLSX, TXT
-  database_path: "/var/lib/panos-monitor/data/metrics.db"  # Absolute path for service
+  # Output and storage settings
+  output_dir: "./output"
+  output_type: "CSV"  # CSV, XLSX, TXT
+  database_path: "./data/enhanced_metrics.db"
   
-  # Web interface settings
-  web_dashboard: true                 # Enable web dashboard
-  web_port: 8080                     # Dashboard port
+  # Web dashboard settings
+  web_dashboard: true
+  web_port: 8080
+  enhanced_dashboard: true
   
-  # Visualization and debugging
-  visualization: true                 # Generate PNG charts on export
-  save_raw_xml: false                # Save XML debug files
-  xml_retention_hours: 24            # Hours to keep XML files
-  log_level: "INFO"                  # Changed from WARNING to INFO for better logging
+  # Visualization and data retention
+  visualization: true
+  save_raw_xml: false
+  xml_retention_hours: 24
+  
+  # Logging
+  log_level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  
+  # Enhanced monitoring features (NEW)
+  interface_monitoring_enabled: true
+  session_statistics_enabled: true
 
-# Your firewall configurations
 firewalls:
-  # Production datacenter firewall
+  # Example 1: Enterprise Datacenter - Detailed Interface Configuration
+  # Best for: Production environments with critical interfaces needing custom names
   datacenter_fw:
     host: "https://10.100.192.3"
-    username: "user1-api"
-    password: "SecretPassword"
+    username: "admin"
+    password: "YourSecurePassword123"
+    verify_ssl: false
+    enabled: true
+    poll_interval: 30  # 30 seconds recommended for interface monitoring
+    dp_aggregation: "mean"  # mean, max, p95
+    
+    # Detailed interface monitoring with custom display names
+    interface_monitoring: true
+    auto_discover_interfaces: false  # Use explicit configuration
+    
+    interface_configs:
+      # WAN/Internet connections
+      - name: "ethernet1/1"
+        display_name: "Primary WAN (ISP1)"
+        enabled: true
+        description: "Primary internet connection via Comcast - 1Gbps - Critical SLA"
+      
+      - name: "ethernet1/2"
+        display_name: "Backup WAN (ISP2)"
+        enabled: true
+        description: "Backup internet connection via Verizon - 500Mbps"
+      
+      # Internal network connections
+      - name: "ethernet1/3"
+        display_name: "Core LAN Uplink"
+        enabled: true
+        description: "10Gbps uplink to core switches - high priority monitoring"
+      
+      - name: "ethernet1/4"
+        display_name: "DMZ Network"
+        enabled: true
+        description: "DMZ for public-facing servers"
+      
+      - name: "ethernet1/5"
+        display_name: "Guest Network"
+        enabled: false  # Disabled - not critical for monitoring
+        description: "Guest wireless network - low priority"
+      
+      # Aggregate interfaces
+      - name: "ae1"
+        display_name: "Core Switch Aggregate"
+        enabled: true
+        description: "2x10G LACP to core switches"
+      
+      - name: "ae2"
+        display_name: "Storage Network Aggregate"
+        enabled: true
+        description: "4x1G LACP to storage network"
+      
+      # VLAN interfaces
+      - name: "vlan.100"
+        display_name: "Production Servers"
+        enabled: true
+        description: "Production server VLAN - critical applications"
+      
+      - name: "vlan.200"
+        display_name: "Development"
+        enabled: false  # Don't monitor dev traffic
+        description: "Development environment VLAN"
+
+  # Example 2: Branch Office - Auto-Discovery with Exclusions
+  # Best for: Dynamic environments or when you want to monitor everything
+  branch_office:
+    host: "https://192.168.1.1"
+    username: "admin"
+    password: "BranchPassword456"
+    verify_ssl: false
+    enabled: true
+    poll_interval: 30
+    dp_aggregation: "max"
+    
+    # Auto-discover all interfaces with smart exclusions
+    interface_monitoring: true
+    auto_discover_interfaces: true
+    
+    # Optional: Specify display names for critical interfaces
+    interface_configs:
+      - name: "ethernet1/1"
+        display_name: "Branch Internet"
+        enabled: true
+        description: "Branch office internet connection"
+    
+    # Exclude management and unnecessary interfaces
+    exclude_interfaces:
+      - "mgmt"           # Management interfaces (mgmt, mgmt0, mgmt1)
+      - "loopback"       # Loopback interfaces
+      - "tunnel"         # VPN tunnel interfaces
+      - "ha1"            # HA sync interfaces
+      - "ha2"
+      - "ethernet1/8"    # Specific interface to exclude
+
+  # Example 3: Small Office - Simple Interface List
+  # Best for: Small setups with known interfaces
+  small_office:
+    host: "https://192.168.10.1"
+    username: "admin"
+    password: "SimplePassword789"
     verify_ssl: false
     enabled: true
     poll_interval: 60
-  
-  # Branch office firewall
-  branch_fw:
-    host: "https://10.100.192.200"
+    dp_aggregation: "mean"
+    
+    # Simple list of interfaces to monitor
+    interface_monitoring: true
+    auto_discover_interfaces: false
+    
+    # Just list the interface names - display names auto-generated
+    monitor_interfaces:
+      - "ethernet1/1"    # Auto-named: "WAN/Internet"
+      - "ethernet1/2"    # Auto-named: "LAN/Internal"
+      - "ethernet1/3"    # Auto-named: "DMZ"
+      - "vlan.100"       # Auto-named: "VLAN 100"
+    
+    # Still can use exclusions with simple lists
+    exclude_interfaces:
+      - "mgmt"
+      - "loopback"
+
+  # Example 4: Hybrid Approach - Auto-Discovery + Specific Configs
+  # Best for: Large environments with some critical interfaces
+  hybrid_fw:
+    host: "https://192.168.20.1"
     username: "admin"
-    password: "SecretPassword"
+    password: "HybridPassword321"
+    verify_ssl: false
+    enabled: true
+    poll_interval: 30
+    dp_aggregation: "p95"
+    
+    # Hybrid: Auto-discover + specific configurations
+    interface_monitoring: true
+    auto_discover_interfaces: true  # Find all interfaces automatically
+    
+    # Specify custom names/settings for critical interfaces only
+    interface_configs:
+      - name: "ethernet1/1"
+        display_name: "Critical WAN Link"
+        enabled: true
+        description: "Primary internet - requires 24/7 monitoring"
+      
+      - name: "ethernet1/2"
+        display_name: "Core Internal"
+        enabled: true
+        description: "Core internal network - high priority"
+      
+      - name: "ethernet1/6"
+        display_name: "Backup Link"
+        enabled: false  # Don't monitor this specific interface
+        description: "Backup connection - not needed for monitoring"
+    
+    # Auto-discovery will find and monitor other interfaces automatically
+    exclude_interfaces:
+      - "mgmt"
+      - "loopback"
+      - "tunnel"
+
+  # Example 5: High-Performance Environment
+  # Best for: High-traffic environments needing detailed monitoring
+  high_perf_fw:
+    host: "https://10.200.50.1"
+    username: "admin"
+    password: "HighPerfPassword654"
+    verify_ssl: false
+    enabled: true
+    poll_interval: 15  # More frequent polling for high-performance monitoring
+    dp_aggregation: "p95"  # Use 95th percentile for capacity planning
+    
+    interface_monitoring: true
+    auto_discover_interfaces: true
+    
+    # Monitor many interfaces with auto-discovery
+    interface_configs:
+      # Critical 10G interfaces
+      - name: "ethernet1/1"
+        display_name: "10G WAN Primary"
+        enabled: true
+        description: "10Gbps primary internet - latency sensitive"
+      
+      - name: "ethernet1/2"
+        display_name: "10G WAN Secondary"
+        enabled: true
+        description: "10Gbps secondary internet - failover"
+      
+      # High-speed aggregates
+      - name: "ae1"
+        display_name: "40G Core Aggregate"
+        enabled: true
+        description: "4x10G LACP to core - critical path"
+      
+      - name: "ae2"
+        display_name: "20G Storage Aggregate"
+        enabled: true
+        description: "2x10G LACP to storage - iSCSI traffic"
+    
+    exclude_interfaces:
+      - "mgmt"
+      - "loopback"
+      - "tunnel"
+
+  # Example 6: Legacy Firewall - Session-Only Monitoring
+  # Best for: Older firewalls or when you only want session-based monitoring
+  legacy_fw:
+    host: "https://192.168.99.1"
+    username: "admin"
+    password: "LegacyPassword999"
     verify_ssl: false
     enabled: true
     poll_interval: 60
-  
-  # Development environment (disabled)
-  dev_fw:
-    host: "https://192.168.100.1"
+    dp_aggregation: "mean"
+    
+    # Disable interface monitoring - only session-based throughput
+    interface_monitoring: false
+    
+    # This firewall will only do:
+    # - Session-based throughput monitoring
+    # - CPU monitoring
+    # - Session statistics
+    # - Packet buffer monitoring
+
+  # Example 7: Cloud/Virtual Firewall - VLAN Focus
+  # Best for: Virtual environments with many VLANs
+  cloud_fw:
+    host: "https://10.0.1.100"
     username: "admin"
-    password: "DevPassword"
-    verify_ssl: true
-    enabled: false
+    password: "CloudPassword111"
+    verify_ssl: true  # Cloud environments often use proper SSL
+    enabled: true
+    poll_interval: 30
+    dp_aggregation: "mean"
+    
+    interface_monitoring: true
+    auto_discover_interfaces: true
+    
+    # Focus on VLAN interfaces in cloud environments
+    interface_configs:
+      - name: "ethernet1/1"
+        display_name: "Cloud Provider Uplink"
+        enabled: true
+        description: "Primary uplink to cloud provider network"
+      
+      # Multiple VLANs
+      - name: "vlan.10"
+        display_name: "Web Tier"
+        enabled: true
+        description: "Web servers VLAN"
+      
+      - name: "vlan.20"
+        display_name: "App Tier"
+        enabled: true
+        description: "Application servers VLAN"
+      
+      - name: "vlan.30"
+        display_name: "Database Tier"
+        enabled: true
+        description: "Database servers VLAN"
+    
+    exclude_interfaces:
+      - "mgmt"
+      - "loopback"
+      - "tunnel"
+
+  # Example 8: Disabled Firewall
+  # For firewalls you want to keep configured but not monitor
+  maintenance_fw:
+    host: "https://192.168.88.1"
+    username: "admin"
+    password: "MaintenancePassword"
+    verify_ssl: false
+    enabled: false  # Disabled - will not be monitored
     poll_interval: 60
+    dp_aggregation: "mean"
+    interface_monitoring: true
+    auto_discover_interfaces: true
+
+# Configuration Tips:
+#
+# 1. Choose Your Method:
+#    - Small networks (1-5 interfaces): Use monitor_interfaces
+#    - Enterprise networks: Use interface_configs with detailed settings
+#    - Dynamic environments: Use auto_discover_interfaces with exclusions
+#    - Mixed requirements: Use hybrid approach
+#
+# 2. Performance Considerations:
+#    - More interfaces = more API calls
+#    - poll_interval of 30 seconds recommended for interface monitoring
+#    - Use exclude_interfaces to reduce unnecessary monitoring
+#
+# 3. Display Names:
+#    - interface_configs: Custom display names
+#    - monitor_interfaces: Auto-generated display names
+#    - auto_discover_interfaces: Auto-generated display names
+#
+# 4. Always Exclude:
+#    - "mgmt" - Management interfaces
+#    - "loopback" - Loopback interfaces
+#    - "tunnel" - VPN tunnels (usually not needed)
+#    - "ha1", "ha2" - HA sync interfaces
+#
+# 5. Testing Your Config:
+#    Run: python enhanced_config.py
+#    This will validate your configuration and show what will be monitored.
