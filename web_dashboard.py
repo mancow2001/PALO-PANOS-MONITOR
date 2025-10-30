@@ -78,6 +78,23 @@ class EnhancedWebDashboard:
                 # Get all firewalls from database
                 db_firewalls = self.database.get_all_firewalls()
                 
+                # FALLBACK: If database is empty, register firewalls from config
+                if not db_firewalls:
+                    LOG.info("No firewalls in database, registering from configuration...")
+                    enabled_fw_names = self.config_manager.get_enabled_firewalls()
+                    
+                    for fw_name in enabled_fw_names:
+                        # Get the actual firewall config object
+                        fw_config = self.config_manager.get_firewall(fw_name)
+                        if fw_config:
+                            self.database.register_firewall(fw_config.name, fw_config.host)
+                            LOG.info(f"Auto-registered firewall: {fw_config.name} at {fw_config.host}")
+                        else:
+                            LOG.warning(f"Could not get config for firewall: {fw_name}")
+                    
+                    # Fetch again after registration
+                    db_firewalls = self.database.get_all_firewalls()
+                
                 # Get enhanced database stats
                 database_stats = self.database.get_database_stats()
                 

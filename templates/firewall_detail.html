@@ -406,7 +406,7 @@
         </div>
         
         <div class="info-banner">
-            🚀 Enhanced Monitoring: Session-based throughput + Accurate interface bandwidth + Session statistics
+            🚀 Enhanced Monitoring: Interface bandwidth + Session statistics + Multi-CPU monitoring
         </div>
 
         <div class="current-values" id="currentValues">
@@ -414,34 +414,6 @@
         </div>
 
         <div class="metrics-grid">
-            <div class="metric-card">
-                <div class="metric-header">
-                    <span class="metric-title">🖥️ CPU Usage</span>
-                </div>
-                <div class="chart-container">
-                    <canvas id="cpuChart"></canvas>
-                </div>
-            </div>
-
-            <div class="metric-card">
-                <div class="metric-header">
-                    <span class="metric-title">🚀 Session-Based Throughput</span>
-                    <div class="metric-toggle">
-                        <button class="toggle-btn active" onclick="toggleSessionThroughputView('mean')" id="session-tput-mean">Mean</button>
-                        <button class="toggle-btn" onclick="toggleSessionThroughputView('max')" id="session-tput-max">Max</button>
-                        <button class="toggle-btn" onclick="toggleSessionThroughputView('min')" id="session-tput-min">Min</button>
-                        <button class="toggle-btn" onclick="toggleSessionThroughputView('p95')" id="session-tput-p95">P95</button>
-                        <button class="toggle-btn" onclick="toggleSessionThroughputView('all')" id="session-tput-all">All</button>
-                    </div>
-                </div>
-                <div class="legend-container" id="sessionThroughputLegend">
-                    <!-- Legend will be populated by JavaScript -->
-                </div>
-                <div class="chart-container">
-                    <canvas id="sessionThroughputChart"></canvas>
-                </div>
-            </div>
-
             <div class="metric-card wide-metric-card">
                 <div class="metric-header">
                     <span class="metric-title">🌐 Interface Bandwidth (Accurate)</span>
@@ -478,20 +450,10 @@
 
             <div class="metric-card">
                 <div class="metric-header">
-                    <span class="metric-title">📊 Session-Based PPS</span>
-                    <div class="metric-toggle">
-                        <button class="toggle-btn active" onclick="togglePpsView('mean')" id="pps-mean">Mean</button>
-                        <button class="toggle-btn" onclick="togglePpsView('max')" id="pps-max">Max</button>
-                        <button class="toggle-btn" onclick="togglePpsView('min')" id="pps-min">Min</button>
-                        <button class="toggle-btn" onclick="togglePpsView('p95')" id="pps-p95">P95</button>
-                        <button class="toggle-btn" onclick="togglePpsView('all')" id="pps-all">All</button>
-                    </div>
-                </div>
-                <div class="legend-container" id="ppsLegend">
-                    <!-- Legend will be populated by JavaScript -->
+                    <span class="metric-title">🖥️ CPU Usage</span>
                 </div>
                 <div class="chart-container">
-                    <canvas id="ppsChart"></canvas>
+                    <canvas id="cpuChart"></canvas>
                 </div>
             </div>
 
@@ -524,8 +486,6 @@
         let refreshInterval;
         let userTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
         let currentCpuAggregation = 'mean';
-        let currentSessionThroughputView = 'mean';
-        let currentPpsView = 'mean';
         let currentInterfaceView = 'both';
         let selectedInterfaces = [];
         let availableInterfaces = [];
@@ -560,22 +520,6 @@
 
         function convertFromUserTimezone(utcDatetime) {
             return new Date(utcDatetime);
-        }
-
-        function toggleSessionThroughputView(view) {
-            currentSessionThroughputView = view;
-            document.querySelectorAll('[id^="session-tput-"]').forEach(btn => btn.classList.remove('active'));
-            document.getElementById(`session-tput-${view}`).classList.add('active');
-            updateSessionThroughputChart();
-            updateSessionThroughputLegend();
-        }
-
-        function togglePpsView(view) {
-            currentPpsView = view;
-            document.querySelectorAll('[id^="pps-"]').forEach(btn => btn.classList.remove('active'));
-            document.getElementById(`pps-${view}`).classList.add('active');
-            updatePpsChart();
-            updatePpsLegend();
         }
 
         function toggleInterfaceView(view) {
@@ -956,11 +900,7 @@
                     <div class="value-number ${getCpuClass(dpCpu)}">${formatValue(dpCpu)}</div>
                     <div class="value-unit">%</div>
                 </div>
-                <div class="value-card">
-                    <div class="value-label">Session Throughput</div>
-                    <div class="value-number">${formatValue(latest.throughput_mbps_total)}</div>
-                    <div class="value-unit">Mbps</div>
-                </div>
+
                 <div class="value-card">
                     <div class="value-label">Interface RX (${interfaceCount} Selected)</div>
                     <div class="value-number">${formatValue(totalInterfaceRx)}</div>
@@ -1055,32 +995,8 @@
                 }
             ]);
 
-            // Session-based throughput chart
-            charts.sessionThroughput = createChart('sessionThroughputChart', [
-                {
-                    label: 'Session Throughput Mean (Mbps)',
-                    data: [],
-                    borderColor: '#2ecc71',
-                    backgroundColor: '#2ecc7120',
-                    fill: false,
-                    tension: 0.4
-                }
-            ]);
-
             // Interface chart
             charts.interface = createChart('interfaceChart', []);
-
-            // Session-based PPS chart
-            charts.pps = createChart('ppsChart', [
-                {
-                    label: 'PPS Mean',
-                    data: [],
-                    borderColor: '#9b59b6',
-                    backgroundColor: '#9b59b620',
-                    fill: false,
-                    tension: 0.4
-                }
-            ]);
 
             // Session statistics chart
             charts.sessionStats = createChart('sessionStatsChart', [
@@ -1105,88 +1021,6 @@
                     tension: 0.4
                 }
             ]);
-        }
-
-        function updateSessionThroughputChart() {
-            if (!lastFetchedData || lastFetchedData.length === 0) return;
-            
-            const reversedData = [...lastFetchedData].reverse();
-            const localTimes = reversedData.map(d => convertFromUserTimezone(d.timestamp));
-            
-            const datasets = [];
-            
-            if (currentSessionThroughputView === 'all') {
-                datasets.push(
-                    {
-                        label: 'Mean (Mbps)',
-                        data: reversedData.map(d => d.throughput_mbps_total || 0),
-                        borderColor: '#2ecc71',
-                        backgroundColor: '#2ecc7120',
-                        fill: false,
-                        tension: 0.4
-                    },
-                    {
-                        label: 'Max (Mbps)',
-                        data: reversedData.map(d => d.throughput_mbps_max || 0),
-                        borderColor: '#e74c3c',
-                        backgroundColor: '#e74c3c20',
-                        fill: false,
-                        tension: 0.4
-                    },
-                    {
-                        label: 'P95 (Mbps)',
-                        data: reversedData.map(d => d.throughput_mbps_p95 || 0),
-                        borderColor: '#f39c12',
-                        backgroundColor: '#f39c1220',
-                        fill: false,
-                        tension: 0.4
-                    },
-                    {
-                        label: 'Min (Mbps)',
-                        data: reversedData.map(d => d.throughput_mbps_min || 0),
-                        borderColor: '#95a5a6',
-                        backgroundColor: '#95a5a620',
-                        fill: false,
-                        tension: 0.4
-                    }
-                );
-            } else {
-                let dataField, label, color;
-                switch(currentSessionThroughputView) {
-                    case 'max':
-                        dataField = 'throughput_mbps_max';
-                        label = 'Max Throughput (Mbps)';
-                        color = '#e74c3c';
-                        break;
-                    case 'min':
-                        dataField = 'throughput_mbps_min';
-                        label = 'Min Throughput (Mbps)';
-                        color = '#95a5a6';
-                        break;
-                    case 'p95':
-                        dataField = 'throughput_mbps_p95';
-                        label = 'P95 Throughput (Mbps)';
-                        color = '#f39c12';
-                        break;
-                    default:
-                        dataField = 'throughput_mbps_total';
-                        label = 'Mean Throughput (Mbps)';
-                        color = '#2ecc71';
-                }
-                
-                datasets.push({
-                    label: label,
-                    data: reversedData.map(d => d[dataField] || 0),
-                    borderColor: color,
-                    backgroundColor: color + '20',
-                    fill: false,
-                    tension: 0.4
-                });
-            }
-            
-            charts.sessionThroughput.data.labels = localTimes;
-            charts.sessionThroughput.data.datasets = datasets;
-            charts.sessionThroughput.update('active');
         }
 
         function updateInterfaceChart() {
@@ -1252,88 +1086,6 @@
             charts.interface.update('active');
         }
 
-        function updatePpsChart() {
-            if (!lastFetchedData || lastFetchedData.length === 0) return;
-            
-            const reversedData = [...lastFetchedData].reverse();
-            const localTimes = reversedData.map(d => convertFromUserTimezone(d.timestamp));
-            
-            const datasets = [];
-            
-            if (currentPpsView === 'all') {
-                datasets.push(
-                    {
-                        label: 'Mean PPS',
-                        data: reversedData.map(d => d.pps_total || 0),
-                        borderColor: '#9b59b6',
-                        backgroundColor: '#9b59b620',
-                        fill: false,
-                        tension: 0.4
-                    },
-                    {
-                        label: 'Max PPS',
-                        data: reversedData.map(d => d.pps_max || 0),
-                        borderColor: '#e74c3c',
-                        backgroundColor: '#e74c3c20',
-                        fill: false,
-                        tension: 0.4
-                    },
-                    {
-                        label: 'P95 PPS',
-                        data: reversedData.map(d => d.pps_p95 || 0),
-                        borderColor: '#f39c12',
-                        backgroundColor: '#f39c1220',
-                        fill: false,
-                        tension: 0.4
-                    },
-                    {
-                        label: 'Min PPS',
-                        data: reversedData.map(d => d.pps_min || 0),
-                        borderColor: '#95a5a6',
-                        backgroundColor: '#95a5a620',
-                        fill: false,
-                        tension: 0.4
-                    }
-                );
-            } else {
-                let dataField, label, color;
-                switch(currentPpsView) {
-                    case 'max':
-                        dataField = 'pps_max';
-                        label = 'Max PPS';
-                        color = '#e74c3c';
-                        break;
-                    case 'min':
-                        dataField = 'pps_min';
-                        label = 'Min PPS';
-                        color = '#95a5a6';
-                        break;
-                    case 'p95':
-                        dataField = 'pps_p95';
-                        label = 'P95 PPS';
-                        color = '#f39c12';
-                        break;
-                    default:
-                        dataField = 'pps_total';
-                        label = 'Mean PPS';
-                        color = '#9b59b6';
-                }
-                
-                datasets.push({
-                    label: label,
-                    data: reversedData.map(d => d[dataField] || 0),
-                    borderColor: color,
-                    backgroundColor: color + '20',
-                    fill: false,
-                    tension: 0.4
-                });
-            }
-            
-            charts.pps.data.labels = localTimes;
-            charts.pps.data.datasets = datasets;
-            charts.pps.update('active');
-        }
-
         function updateSessionStatsChart() {
             if (!lastFetchedSessionStats || lastFetchedSessionStats.length === 0) return;
             
@@ -1382,10 +1134,6 @@
                 charts.pbuf.update('active');
             }
             
-            // Update session-based charts
-            updateSessionThroughputChart();
-            updatePpsChart();
-            
             // Update interface charts
             updateInterfaceChart();
             
@@ -1393,96 +1141,7 @@
             updateSessionStatsChart();
             
             // Update legends
-            updateSessionThroughputLegend();
-            updatePpsLegend();
             updateInterfaceLegend();
-        }
-
-        function updateSessionThroughputLegend() {
-            // Similar to existing legend update functions
-            const legend = document.getElementById('sessionThroughputLegend');
-            if (currentSessionThroughputView === 'all') {
-                legend.innerHTML = `
-                    <div class="legend-item">
-                        <span class="legend-color" style="background-color: #2ecc71;"></span>
-                        <span>Session Mean (Mbps)</span>
-                    </div>
-                    <div class="legend-item">
-                        <span class="legend-color" style="background-color: #e74c3c;"></span>
-                        <span>Session Max (Mbps)</span>
-                    </div>
-                    <div class="legend-item">
-                        <span class="legend-color" style="background-color: #f39c12;"></span>
-                        <span>Session P95 (Mbps)</span>
-                    </div>
-                    <div class="legend-item">
-                        <span class="legend-color" style="background-color: #95a5a6;"></span>
-                        <span>Session Min (Mbps)</span>
-                    </div>
-                `;
-            } else {
-                const labels = {
-                    mean: 'Session Mean Throughput',
-                    max: 'Session Max Throughput',
-                    min: 'Session Min Throughput',
-                    p95: 'Session P95 Throughput'
-                };
-                const colors = {
-                    mean: '#2ecc71',
-                    max: '#e74c3c',
-                    min: '#95a5a6',
-                    p95: '#f39c12'
-                };
-                legend.innerHTML = `
-                    <div class="legend-item">
-                        <span class="legend-color" style="background-color: ${colors[currentSessionThroughputView]};"></span>
-                        <span>${labels[currentSessionThroughputView]} (Mbps)</span>
-                    </div>
-                `;
-            }
-        }
-
-        function updatePpsLegend() {
-            const legend = document.getElementById('ppsLegend');
-            if (currentPpsView === 'all') {
-                legend.innerHTML = `
-                    <div class="legend-item">
-                        <span class="legend-color" style="background-color: #9b59b6;"></span>
-                        <span>Session Mean PPS</span>
-                    </div>
-                    <div class="legend-item">
-                        <span class="legend-color" style="background-color: #e74c3c;"></span>
-                        <span>Session Max PPS</span>
-                    </div>
-                    <div class="legend-item">
-                        <span class="legend-color" style="background-color: #f39c12;"></span>
-                        <span>Session P95 PPS</span>
-                    </div>
-                    <div class="legend-item">
-                        <span class="legend-color" style="background-color: #95a5a6;"></span>
-                        <span>Session Min PPS</span>
-                    </div>
-                `;
-            } else {
-                const labels = {
-                    mean: 'Session Mean PPS',
-                    max: 'Session Max PPS',
-                    min: 'Session Min PPS',
-                    p95: 'Session P95 PPS'
-                };
-                const colors = {
-                    mean: '#9b59b6',
-                    max: '#e74c3c',
-                    min: '#95a5a6',
-                    p95: '#f39c12'
-                };
-                legend.innerHTML = `
-                    <div class="legend-item">
-                        <span class="legend-color" style="background-color: ${colors[currentPpsView]};"></span>
-                        <span>${labels[currentPpsView]}</span>
-                    </div>
-                `;
-            }
         }
 
         function updateInterfaceLegend() {
@@ -1538,18 +1197,7 @@
                 'Data Plane CPU Mean (%)',
                 'Data Plane CPU Max (%)',
                 'Data Plane CPU P95 (%)',
-                'Session Throughput Mean (Mbps)',
-                'Session Throughput Max (Mbps)',
-                'Session Throughput Min (Mbps)',
-                'Session Throughput P95 (Mbps)',
-                'Session PPS Mean',
-                'Session PPS Max',
-                'Session PPS Min',
-                'Session PPS P95',
-                'Packet Buffer (%)',
-                'Sample Count',
-                'Success Rate (%)',
-                'Sampling Period (s)'
+                'Packet Buffer (%)'
             ];
 
             // Add interface headers
@@ -1575,18 +1223,7 @@
                     formatValue(row.data_plane_cpu_mean) || '',
                     formatValue(row.data_plane_cpu_max) || '',
                     formatValue(row.data_plane_cpu_p95) || '',
-                    formatValue(row.throughput_mbps_total) || '',
-                    formatValue(row.throughput_mbps_max) || '',
-                    formatValue(row.throughput_mbps_min) || '',
-                    formatValue(row.throughput_mbps_p95) || '',
-                    formatValue(row.pps_total, 0) || '',
-                    formatValue(row.pps_max, 0) || '',
-                    formatValue(row.pps_min, 0) || '',
-                    formatValue(row.pps_p95, 0) || '',
-                    formatValue(row.pbuf_util_percent) || '',
-                    row.session_sample_count || '',
-                    formatValue((row.session_success_rate || 0) * 100, 1) || '',
-                    formatValue(row.session_sampling_period) || ''
+                    formatValue(row.pbuf_util_percent) || ''
                 ];
                 
                 // Add interface data
@@ -1618,7 +1255,7 @@
             const startDate = document.getElementById('startDate').value;
             const endDate = document.getElementById('endDate').value;
             
-            let filename = `${firewallName}_enhanced_metrics_${now.getFullYear()}${(now.getMonth()+1).toString().padStart(2,'0')}${now.getDate().toString().padStart(2,'0')}`;
+            let filename = `${firewallName}_firewall_metrics_${now.getFullYear()}${(now.getMonth()+1).toString().padStart(2,'0')}${now.getDate().toString().padStart(2,'0')}`;
             
             if (startDate && endDate) {
                 filename += `_${startDate}_to_${endDate}`;

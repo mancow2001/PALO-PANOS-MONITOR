@@ -96,12 +96,14 @@ class EnhancedMetricsDatabase:
     def __init__(self, db_path: str):
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        LOG.info(f"🔧 Initializing database at: {self.db_path}")
         self._init_database()
+        LOG.info(f"✅ Database ready at: {self.db_path}")
     
     def _init_database(self):
         """Initialize database schema with automatic migration"""
         with self._get_connection() as conn:
-            # Create firewalls table
+            # Create firewalls table FIRST (before metrics table due to foreign key)
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS firewalls (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -111,6 +113,7 @@ class EnhancedMetricsDatabase:
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
+            LOG.info("✓ Firewalls table created/verified")
             
             # Create metrics table
             conn.execute("""
@@ -133,6 +136,7 @@ class EnhancedMetricsDatabase:
                     FOREIGN KEY (firewall_name) REFERENCES firewalls (name)
                 )
             """)
+            LOG.info("✓ Metrics table created/verified")
             
             # Create indexes for better query performance
             conn.execute("""
@@ -144,6 +148,7 @@ class EnhancedMetricsDatabase:
                 CREATE INDEX IF NOT EXISTS idx_metrics_timestamp 
                 ON metrics (timestamp)
             """)
+            LOG.info("✓ Metrics indexes created/verified")
             
             # Create configuration table for storing runtime config
             conn.execute("""
@@ -153,8 +158,17 @@ class EnhancedMetricsDatabase:
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
+            LOG.info("✓ Configuration table created/verified")
             
             conn.commit()
+            
+            # Verify critical tables exist
+            cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='firewalls'")
+            if not cursor.fetchone():
+                LOG.error("❌ CRITICAL: Firewalls table was not created!")
+                raise RuntimeError("Failed to create firewalls table")
+            
+            LOG.info("✅ Core database tables initialized")
         
         # Automatically migrate schema to add enhanced statistics and interface monitoring
         self._migrate_schema()
@@ -162,37 +176,100 @@ class EnhancedMetricsDatabase:
         LOG.info(f"Enhanced database initialized with interface monitoring: {self.db_path}")
     
     def _migrate_schema(self):
-        """Automatically detect and add new columns for enhanced statistics and interface monitoring"""
+        """Automatically detect schema changes and migrate database"""
         with self._get_connection() as conn:
             # Check what columns currently exist in metrics table
             cursor = conn.execute("PRAGMA table_info(metrics)")
             existing_columns = [row[1] for row in cursor.fetchall()]
             
-            # Define enhanced columns we want to add
-            enhanced_columns = [
-                ('throughput_mbps_max', 'REAL', 'Maximum throughput during sampling period'),
-                ('throughput_mbps_min', 'REAL', 'Minimum throughput during sampling period'),
-                ('throughput_mbps_p95', 'REAL', '95th percentile throughput'),
-                ('pps_max', 'REAL', 'Maximum packets per second'),
-                ('pps_min', 'REAL', 'Minimum packets per second'),
-                ('pps_p95', 'REAL', '95th percentile packets per second'),
-                ('session_sample_count', 'INTEGER', 'Number of per-second samples'),
-                ('session_success_rate', 'REAL', 'Success rate of sampling (0.0-1.0)'),
-                ('session_sampling_period', 'REAL', 'Actual sampling period in seconds')
+            # Define columns that should be REMOVED (no longer collected)
+            obsolete_columns = [
+                'throughput_mbps_total',      # Session-based throughput (replaced by interface metrics)
+                'throughput_mbps_max',        # Session-based throughput max
+                'throughput_mbps_min',        # Session-based throughput min
+                'throughput_mbps_p95',        # Session-based throughput p95
+                'pps_total',                  # Session-based PPS (replaced by interface metrics)
+                'pps_max',                    # Session-based PPS max
+                'pps_min',                    # Session-based PPS min
+                'pps_p95',                    # Session-based PPS p95
+                'session_sample_count',       # Session sampling metadata
+                'session_success_rate',       # Session sampling metadata
+                'session_sampling_period',    # Session sampling metadata
             ]
             
-            # Track migration progress
-            added_columns = []
+            # Check if any obsolete columns exist
+            columns_to_remove = [col for col in obsolete_columns if col in existing_columns]
             
-            # Add any missing columns
-            for column_name, column_type, description in enhanced_columns:
-                if column_name not in existing_columns:
-                    try:
-                        conn.execute(f"ALTER TABLE metrics ADD COLUMN {column_name} {column_type}")
-                        added_columns.append(column_name)
-                        LOG.info(f"✅ Enhanced database: Added '{column_name}' column ({description})")
-                    except Exception as e:
-                        LOG.warning(f"❌ Could not add column '{column_name}': {e}")
+            if columns_to_remove:
+                LOG.info(f"🔍 Schema migration: Detected {len(columns_to_remove)} obsolete columns (no longer collected)")
+                LOG.info(f"   Removing session-based throughput columns (now using interface-based monitoring)")
+                
+                # SQLite doesn't support DROP COLUMN easily, so we need to recreate the table
+                # Get the columns we want to keep
+                columns_to_keep = [col for col in existing_columns if col not in obsolete_columns]
+                
+                # Build the new table schema with only columns we want
+                new_columns_def = []
+                cursor = conn.execute("PRAGMA table_info(metrics)")
+                for row in cursor.fetchall():
+                    col_name = row[1]
+                    if col_name in columns_to_keep:
+                        col_type = row[2]
+                        not_null = " NOT NULL" if row[3] else ""
+                        default = f" DEFAULT {row[4]}" if row[4] is not None else ""
+                        pk = " PRIMARY KEY AUTOINCREMENT" if row[5] else ""
+                        new_columns_def.append(f"{col_name} {col_type}{not_null}{default}{pk}")
+                
+                # Add foreign key constraint
+                if 'firewall_name' in columns_to_keep:
+                    new_columns_def.append("FOREIGN KEY (firewall_name) REFERENCES firewalls (name)")
+                
+                try:
+                    # Create new table with updated schema
+                    conn.execute(f"""
+                        CREATE TABLE metrics_new (
+                            {', '.join(new_columns_def)}
+                        )
+                    """)
+                    
+                    # Copy data from old table to new table
+                    columns_str = ', '.join(columns_to_keep)
+                    conn.execute(f"""
+                        INSERT INTO metrics_new ({columns_str})
+                        SELECT {columns_str} FROM metrics
+                    """)
+                    
+                    # Drop old table
+                    conn.execute("DROP TABLE metrics")
+                    
+                    # Rename new table
+                    conn.execute("ALTER TABLE metrics_new RENAME TO metrics")
+                    
+                    # Recreate indexes
+                    conn.execute("""
+                        CREATE INDEX IF NOT EXISTS idx_metrics_firewall_timestamp 
+                        ON metrics (firewall_name, timestamp)
+                    """)
+                    
+                    conn.execute("""
+                        CREATE INDEX IF NOT EXISTS idx_metrics_timestamp 
+                        ON metrics (timestamp)
+                    """)
+                    
+                    conn.commit()
+                    
+                    LOG.info(f"✅ Schema migration successful: Removed {len(columns_to_remove)} obsolete columns")
+                    for col in columns_to_remove:
+                        LOG.info(f"   ✓ Removed: {col}")
+                    LOG.info(f"📈 Throughput now tracked via interface_metrics table (more accurate)")
+                    
+                except Exception as e:
+                    LOG.error(f"❌ Schema migration failed: {e}")
+                    conn.rollback()
+                    LOG.warning("   Database rolled back to previous state")
+                    LOG.warning("   Obsolete columns will remain but won't receive new data")
+            else:
+                LOG.debug("✅ Schema is up-to-date: No obsolete columns found")
             
             # Create interface metrics table
             conn.execute("""
@@ -244,18 +321,12 @@ class EnhancedMetricsDatabase:
             # Commit all changes
             conn.commit()
             
-            # Log migration summary
-            if added_columns:
-                LOG.info(f"🚀 Schema migration completed: Added {len(added_columns)} new columns for enhanced statistics")
-                LOG.info(f"   New capabilities: Enhanced throughput and PPS tracking with min/max/P95 statistics")
-            
             # Check if new tables were created
             cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('interface_metrics', 'session_statistics')")
             new_tables = [row[0] for row in cursor.fetchall()]
             
             if new_tables:
-                LOG.info(f"📊 Interface monitoring tables created: {', '.join(new_tables)}")
-                LOG.info(f"   New capabilities: Accurate interface bandwidth and session tracking")
+                LOG.info(f"📊 Interface monitoring tables ready: {', '.join(new_tables)}")
             else:
                 LOG.debug("✅ Interface monitoring tables already exist")
     
@@ -287,6 +358,10 @@ class EnhancedMetricsDatabase:
     def insert_metrics(self, firewall_name: str, metrics: Dict[str, Any]) -> bool:
         """Insert enhanced metrics data for a firewall"""
         try:
+            # Auto-register firewall if metrics include host information
+            if 'firewall_host' in metrics:
+                self.register_firewall(firewall_name, metrics['firewall_host'])
+            
             with self._get_connection() as conn:
                 # Convert timestamp string to datetime if needed
                 timestamp = metrics.get('timestamp')
@@ -298,16 +373,14 @@ class EnhancedMetricsDatabase:
                     # Add UTC timezone if missing
                     timestamp = timestamp.replace(tzinfo=timezone.utc)
                 
-                # Enhanced INSERT statement with all new columns
+                # Only insert columns that are present in current schema
+                # These obsolete columns are no longer used after migration
                 conn.execute("""
                     INSERT INTO metrics (
                         firewall_name, timestamp, cpu_user, cpu_system, cpu_idle,
                         mgmt_cpu, data_plane_cpu, data_plane_cpu_mean, data_plane_cpu_max, 
-                        data_plane_cpu_p95, throughput_mbps_total, throughput_mbps_max,
-                        throughput_mbps_min, throughput_mbps_p95, pps_total, pps_max,
-                        pps_min, pps_p95, session_sample_count, session_success_rate,
-                        session_sampling_period, pbuf_util_percent
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        data_plane_cpu_p95, pbuf_util_percent
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     firewall_name,
                     timestamp,
@@ -319,17 +392,6 @@ class EnhancedMetricsDatabase:
                     metrics.get('data_plane_cpu_mean'),
                     metrics.get('data_plane_cpu_max'),
                     metrics.get('data_plane_cpu_p95'),
-                    metrics.get('throughput_mbps_total'),
-                    metrics.get('throughput_mbps_max'),      # Enhanced
-                    metrics.get('throughput_mbps_min'),      # Enhanced
-                    metrics.get('throughput_mbps_p95'),      # Enhanced
-                    metrics.get('pps_total'),
-                    metrics.get('pps_max'),                  # Enhanced
-                    metrics.get('pps_min'),                  # Enhanced
-                    metrics.get('pps_p95'),                  # Enhanced
-                    metrics.get('session_sample_count'),     # Enhanced
-                    metrics.get('session_success_rate'),     # Enhanced
-                    metrics.get('session_sampling_period'),  # Enhanced
                     metrics.get('pbuf_util_percent')
                 ))
                 conn.commit()
@@ -341,6 +403,10 @@ class EnhancedMetricsDatabase:
     def insert_interface_metrics(self, firewall_name: str, interface_metrics: Dict[str, Any]) -> bool:
         """Insert interface metrics data"""
         try:
+            # Auto-register firewall if metrics include host information
+            if 'firewall_host' in interface_metrics:
+                self.register_firewall(firewall_name, interface_metrics['firewall_host'])
+            
             with self._get_connection() as conn:
                 timestamp = interface_metrics.get('timestamp')
                 if isinstance(timestamp, str):
@@ -375,6 +441,10 @@ class EnhancedMetricsDatabase:
     def insert_session_statistics(self, firewall_name: str, session_stats: Dict[str, Any]) -> bool:
         """Insert session statistics data"""
         try:
+            # Auto-register firewall if metrics include host information
+            if 'firewall_host' in session_stats:
+                self.register_firewall(firewall_name, session_stats['firewall_host'])
+            
             with self._get_connection() as conn:
                 timestamp = session_stats.get('timestamp')
                 if isinstance(timestamp, str):

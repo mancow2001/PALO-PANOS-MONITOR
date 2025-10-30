@@ -15,14 +15,13 @@ from typing import Dict, Optional, Tuple, List, Any
 from threading import Thread, Event, Lock
 from queue import Queue
 from dataclasses import dataclass, field
-import statistics
 
 import requests
 from requests.exceptions import RequestException
 import urllib3
 
 # Import our interface monitoring module - FIXED IMPORT
-from interface_monitor_fixed import (
+from interface_monitor import (
     InterfaceMonitor, InterfaceConfig,
     parse_interface_statistics_your_panos11, parse_session_statistics_your_panos11
 )
@@ -43,31 +42,7 @@ class CollectionResult:
     error: Optional[str] = None
     timestamp: Optional[datetime] = None
 
-@dataclass
-class SessionInfoSample:
-    """Single session info sample with timestamp"""
-    timestamp: datetime
-    kbps: float
-    pps: float
-    success: bool
-    error: Optional[str] = None
 
-@dataclass
-class SessionInfoAggregates:
-    """Aggregated session info over sampling period"""
-    sample_count: int = 0
-    kbps_samples: List[float] = field(default_factory=list)
-    pps_samples: List[float] = field(default_factory=list)
-    kbps_mean: float = 0.0
-    kbps_max: float = 0.0
-    kbps_min: float = 0.0
-    kbps_p95: float = 0.0
-    pps_mean: float = 0.0
-    pps_max: float = 0.0
-    pps_min: float = 0.0
-    pps_p95: float = 0.0
-    sampling_period: float = 0.0
-    success_rate: float = 0.0
 
 def create_default_interface_configs() -> List[InterfaceConfig]:
     """Create default interface configurations for common PAN-OS interfaces"""
@@ -197,11 +172,42 @@ class PanOSClient:
         return self.op(xml_cmd, timeout=10)
 
     def request(self, xml_cmd: str) -> Optional[str]:
-        """Execute request command - NOT SUPPORTED by your PAN-OS 11"""
-        # Based on debug results, request commands don't work on your system
-        self.last_error = "Request commands not supported by this PAN-OS 11 system"
-        LOG.debug("Request command skipped - not supported by this PAN-OS 11 system")
-        return None
+        """Execute request command - try it anyway for debug status"""
+        if not self.api_key:
+            self.last_error = "API key not set; call keygen() first"
+            return None
+            
+        url = f"{self.base}/api/"
+        # Request commands use type=op (not type=request)
+        params = {"type": "op", "cmd": xml_cmd, "key": self.api_key}
+        
+        try:
+            resp = self.session.get(url, params=params, timeout=30)
+            resp.raise_for_status()
+            
+            # Check for API-level errors
+            if 'status="error"' in resp.text:
+                try:
+                    root = ET.fromstring(resp.text)
+                    error_code = root.findtext('.//code', 'unknown')
+                    error_msg = root.findtext('.//msg', 'Unknown API error')
+                    self.last_error = f"API error (code {error_code}): {error_msg}"
+                    LOG.warning(f"Request command failed: {self.last_error}")
+                except:
+                    self.last_error = f"API error in response: {resp.text[:200]}..."
+                return None
+            
+            self.last_error = None
+            return resp.text
+            
+        except RequestException as e:
+            self.last_error = f"API request error: {e}"
+            LOG.error(f"Request command failed: {self.last_error}")
+            return None
+        except Exception as e:
+            self.last_error = f"Unexpected error: {e}"
+            LOG.error(f"Request command failed: {self.last_error}")
+            return None
 
 # Helper functions (same as before)
 def _numbers_from_csv(text: str) -> List[float]:
@@ -403,12 +409,137 @@ def parse_pbuf_live_from_rm_your_panos11(xml_text: str) -> Tuple[Dict[str, float
     except Exception as e:
         return {}, f"pbuf: unexpected parsing error - {e}"
 
-def parse_throughput_from_session_info_your_panos11(xml_text: str) -> Tuple[Dict[str, float], str]:
-    """Parse throughput from session info - working on your PAN-OS 11"""
+def parse_cpu_from_debug_status(xml_text: str) -> Tuple[Dict[str, float], str]:
+    """
+    Parse management CPU from debug status - most accurate method
+    Uses: <request><s><debug><status/></debug></s></request>
+    This gives the same values as the GUI dashboard
+    """
+    out: Dict[str, float] = {}
+    try:
+        root = ET.fromstring(xml_text)
+        
+        # Look for the mp-cpu-utilization field
+        mp_cpu = root.findtext(".//mp-cpu-utilization")
+        if mp_cpu:
+            try:
+                cpu_percent = float(mp_cpu)
+                out.update({
+                    "mgmt_cpu": cpu_percent,
+                    "mgmt_cpu_debug": cpu_percent  # Keep both for compatibility
+                })
+                return out, f"cpu: debug status {cpu_percent}%"
+            except ValueError:
+                pass
+        
+        return {}, "cpu: no mp-cpu-utilization in debug status"
+    except Exception as e:
+        return {}, f"cpu parse error from debug status: {e}"
+
+def parse_cpu_from_system_info(xml_text: str) -> Tuple[Dict[str, float], str]:
+    """
+    Parse management CPU from system info - more reliable than top
+    Uses: <show><s><info/></s></show>
+    """
+    out: Dict[str, float] = {}
+    try:
+        root = ET.fromstring(xml_text)
+        
+        # Look for system info load average fields
+        load_avg_1min = root.findtext(".//system/load-avg-1-min")
+        load_avg_5min = root.findtext(".//system/load-avg-5-min")
+        load_avg_15min = root.findtext(".//system/load-avg-15-min")
+        
+        if load_avg_1min:
+            try:
+                # Load average is typically 0-N (where N is number of cores)
+                # Convert to rough CPU percentage (load avg * 100, capped at 100%)
+                load_avg = float(load_avg_1min)
+                cpu_percent = min(load_avg * 100, 100.0)
+                out.update({
+                    "mgmt_cpu": cpu_percent,
+                    "mgmt_cpu_load_avg": cpu_percent,
+                    "load_avg_1min": load_avg
+                })
+                
+                # Add 5min and 15min if available
+                if load_avg_5min:
+                    out["load_avg_5min"] = float(load_avg_5min)
+                if load_avg_15min:
+                    out["load_avg_15min"] = float(load_avg_15min)
+                
+                return out, f"cpu: system info load avg {load_avg} ({cpu_percent:.1f}%)"
+            except ValueError:
+                pass
+        
+        # Alternative: look for uptime field which might contain load average
+        uptime = root.findtext(".//system/uptime") or ""
+        if "load average:" in uptime.lower():
+            # Extract load average from uptime string
+            # Format: "up 1 day, 2:34, load average: 0.15, 0.10, 0.05"
+            match = re.search(r"load average:\s*([0-9.]+)", uptime, re.IGNORECASE)
+            if match:
+                load_avg = float(match.group(1))
+                cpu_percent = min(load_avg * 100, 100.0)
+                out.update({
+                    "mgmt_cpu": cpu_percent,
+                    "mgmt_cpu_load_avg": cpu_percent,
+                    "load_avg_1min": load_avg
+                })
+                return out, f"cpu: uptime load avg {load_avg} ({cpu_percent:.1f}%)"
+        
+        return {}, "cpu: no load average found in system info"
+    except Exception as e:
+        return {}, f"cpu parse error from system info: {e}"
+
+def parse_cpu_from_top(xml_text: str) -> Tuple[Dict[str, float], str]:
+    """
+    Parse management CPU from top CDATA (fallback method)
+    Enhanced version with better regex patterns
+    """
+    out: Dict[str, float] = {}
+    try:
+        root = ET.fromstring(xml_text)
+        raw = root.findtext("result") or "".join(root.itertext())
+        if not raw:
+            return {}, "cpu: no result text"
+        
+        # Clean up the text
+        text = raw.replace("\r", "").replace("\n", " ").replace("\t", " ")
+        
+        # Multiple regex patterns to handle different top output formats
+        patterns = [
+            # Standard format: %Cpu(s): 51.9%us, 5.4%sy, 1.0%ni, 41.6%id, 0.1%wa, 0.0%hi, 0.0%si, 0.0%st
+            r"%?Cpu\(s\)[^0-9]*([0-9.]+)%?\s*us[, ]+\s*([0-9.]+)%?\s*sy[, ]+.*?([0-9.]+)%?\s*id",
+            # Alternative format without %: Cpu(s): 51.9 us, 5.4 sy, 1.0 ni, 41.6 id
+            r"Cpu\(s\):\s*([0-9.]+)\s*us[, ]+\s*([0-9.]+)\s*sy[, ]+.*?([0-9.]+)\s*id",
+            # Compact format: CPU: 51.9us 5.4sy 41.6id
+            r"CPU:\s*([0-9.]+)us\s*([0-9.]+)sy\s*([0-9.]+)id",
+        ]
+        
+        for i, pattern in enumerate(patterns):
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                usr, sy, idle = map(float, match.groups())
+                mgmt_cpu = usr + sy
+                out.update({
+                    "cpu_user": usr,
+                    "cpu_system": sy,
+                    "cpu_idle": idle,
+                    "mgmt_cpu": mgmt_cpu
+                })
+                return out, f"cpu: fallback top pattern {i+1} - {mgmt_cpu}%"
+        
+        return {}, "cpu: no patterns matched in fallback top"
+    except Exception as e:
+        return {}, f"cpu fallback top parse error: {e}"
+
+def parse_management_cpu_from_system_resources(xml_text: str) -> Tuple[Dict[str, float], str]:
+    """Parse management plane CPU from system resources - for your PAN-OS 11"""
     out: Dict[str, float] = {}
     
     if not xml_text or not xml_text.strip():
-        return {}, "throughput: empty session info response"
+        return {}, "mgmt-cpu: empty system resources response"
     
     try:
         root = ET.fromstring(xml_text)
@@ -417,189 +548,103 @@ def parse_throughput_from_session_info_your_panos11(xml_text: str) -> Tuple[Dict
         status = root.get('status')
         if status == 'error':
             error_msg = root.findtext('.//msg', 'Unknown API error')
-            return {}, f"throughput: session info API error - {error_msg}"
+            return {}, f"mgmt-cpu: system resources API error - {error_msg}"
         
-        # Based on debug results, session info works and has a result element
-        result_elem = root.find(".//result")
-        if result_elem is None:
-            return {}, "throughput: no result element found in session info"
+        # Common paths for management CPU in system resources
+        # PAN-OS typically reports CPU usage as a percentage
+        cpu_paths = [
+            ".//result/cpu/user",
+            ".//result/cpu/sys", 
+            ".//cpu/user",
+            ".//cpu/sys",
+            ".//result/load-average/entry",
+            ".//load-average/entry"
+        ]
         
-        # Look for kbps and pps fields
-        kbps_elem = result_elem.find("kbps")
-        pps_elem = result_elem.find("pps")
+        cpu_values = []
         
-        if kbps_elem is not None and kbps_elem.text:
-            try:
-                kbps_value = float(kbps_elem.text.strip())
-                out["kbps"] = kbps_value
-                out["throughput_mbps"] = kbps_value / 1000.0
-            except ValueError:
-                pass
-                
-        if pps_elem is not None and pps_elem.text:
-            try:
-                pps_value = float(pps_elem.text.strip())
-                out["pps"] = pps_value
-            except ValueError:
-                pass
+        # Try to find CPU user and system time
+        user_cpu = None
+        sys_cpu = None
         
-        if "kbps" in out or "pps" in out:
-            return out, "throughput: parsed session info (your PAN-OS 11)"
-        else:
-            return {}, "throughput: no kbps/pps data found in session info"
-                
+        for path in [".//result/cpu/user", ".//cpu/user"]:
+            elem = root.find(path)
+            if elem is not None and elem.text:
+                try:
+                    user_cpu = float(elem.text.strip().rstrip('%'))
+                    break
+                except ValueError:
+                    pass
+        
+        for path in [".//result/cpu/sys", ".//cpu/sys"]:
+            elem = root.find(path)
+            if elem is not None and elem.text:
+                try:
+                    sys_cpu = float(elem.text.strip().rstrip('%'))
+                    break
+                except ValueError:
+                    pass
+        
+        # If we found user and sys CPU, calculate total management CPU
+        if user_cpu is not None and sys_cpu is not None:
+            total_cpu = user_cpu + sys_cpu
+            if 0 <= total_cpu <= 100:
+                out["management_cpu"] = total_cpu
+                out["management_cpu_user"] = user_cpu
+                out["management_cpu_sys"] = sys_cpu
+                return out, f"mgmt-cpu: parsed from system resources (user: {user_cpu}%, sys: {sys_cpu}%)"
+        
+        # Alternative: Look for load average and convert to percentage
+        # Load average format: typically 1-minute, 5-minute, 15-minute
+        load_entries = root.findall(".//load-average/entry") or root.findall(".//result/load-average/entry")
+        if load_entries:
+            # Get 1-minute load average (first entry)
+            for entry in load_entries:
+                name_elem = entry.find("name")
+                value_elem = entry.find("value")
+                if name_elem is not None and value_elem is not None:
+                    name = name_elem.text or ""
+                    if "1" in name or "one" in name.lower():  # 1-minute load average
+                        try:
+                            load_value = float(value_elem.text.strip())
+                            # Convert load average to approximate CPU percentage
+                            # Assuming single CPU core, load of 1.0 = 100%
+                            # For multi-core, this is an approximation
+                            cpu_percent = min(load_value * 100, 100)
+                            out["management_cpu"] = cpu_percent
+                            return out, f"mgmt-cpu: estimated from load average ({load_value})"
+                        except ValueError:
+                            pass
+        
+        # Try alternative structure - sometimes CPU is directly under result
+        result = root.find(".//result")
+        if result is not None:
+            # Look for any element with "cpu" in the name
+            for child in result:
+                tag_lower = child.tag.lower()
+                if "cpu" in tag_lower and child.text:
+                    try:
+                        value = float(child.text.strip().rstrip('%'))
+                        if 0 <= value <= 100:
+                            cpu_values.append(value)
+                            LOG.debug(f"Found CPU value in {child.tag}: {value}%")
+                    except ValueError:
+                        pass
+        
+        if cpu_values:
+            out["management_cpu"] = sum(cpu_values)
+            return out, f"mgmt-cpu: parsed {len(cpu_values)} CPU values"
+        
+        # If we still haven't found anything, return empty
+        out["management_cpu"] = 0.0
+        return out, "mgmt-cpu: no CPU data found in system resources"
+        
     except ET.ParseError as e:
-        return {}, f"throughput: XML parse error - {e}"
+        return {}, f"mgmt-cpu: XML parse error - {e}"
     except Exception as e:
-        return {}, f"throughput: unexpected parsing error - {e}"
+        return {}, f"mgmt-cpu: unexpected parsing error - {e}"
 
-def aggregate_session_info_samples(samples: List[SessionInfoSample]) -> SessionInfoAggregates:
-    """Aggregate per-second session info samples into statistics"""
-    if not samples:
-        return SessionInfoAggregates()
-    
-    successful_samples = [s for s in samples if s.success]
-    
-    if not successful_samples:
-        return SessionInfoAggregates(
-            sample_count=len(samples),
-            success_rate=0.0,
-            sampling_period=(samples[-1].timestamp - samples[0].timestamp).total_seconds()
-        )
-    
-    kbps_values = [s.kbps for s in successful_samples]
-    pps_values = [s.pps for s in successful_samples]
-    
-    aggregates = SessionInfoAggregates(
-        sample_count=len(samples),
-        kbps_samples=kbps_values,
-        pps_samples=pps_values,
-        success_rate=len(successful_samples) / len(samples),
-        sampling_period=(samples[-1].timestamp - samples[0].timestamp).total_seconds()
-    )
-    
-    if kbps_values:
-        aggregates.kbps_mean = statistics.mean(kbps_values)
-        aggregates.kbps_max = max(kbps_values)
-        aggregates.kbps_min = min(kbps_values)
-        aggregates.kbps_p95 = calculate_percentile(kbps_values, 0.95)
-    
-    if pps_values:
-        aggregates.pps_mean = statistics.mean(pps_values)
-        aggregates.pps_max = max(pps_values)
-        aggregates.pps_min = min(pps_values)
-        aggregates.pps_p95 = calculate_percentile(pps_values, 0.95)
-    
-    return aggregates
 
-class SessionInfoSampler:
-    """Per-second session info sampler optimized for your PAN-OS 11"""
-    
-    def __init__(self, name: str, client: PanOSClient):
-        self.name = name
-        self.client = client
-        self.running = False
-        self.samples: List[SessionInfoSample] = []
-        self.samples_lock = Lock()
-        self.thread: Optional[Thread] = None
-        self.stop_event = Event()
-        
-    def start_sampling(self):
-        """Start per-second sampling"""
-        if self.running:
-            return
-        
-        self.running = True
-        self.stop_event.clear()
-        self.thread = Thread(
-            target=self._sampling_worker,
-            daemon=True,
-            name=f"session-sampler-{self.name}"
-        )
-        self.thread.start()
-        LOG.debug(f"{self.name}: Started session info sampling")
-    
-    def stop_sampling(self):
-        """Stop per-second sampling"""
-        if not self.running:
-            return
-        
-        self.running = False
-        self.stop_event.set()
-        if self.thread and self.thread.is_alive():
-            self.thread.join(timeout=2)
-        LOG.debug(f"{self.name}: Stopped session info sampling")
-    
-    def _sampling_worker(self):
-        """Worker thread for per-second session info sampling"""
-        consecutive_failures = 0
-        max_failures = 10
-        
-        while not self.stop_event.is_set():
-            start_time = time.time()
-            timestamp = datetime.now(timezone.utc)
-            
-            try:
-                # Sample session info using the working command
-                xml = self.client.op_fast("<show><session><info/></session></show>")
-                
-                if xml:
-                    metrics, msg = parse_throughput_from_session_info_your_panos11(xml)
-                    if metrics and ("kbps" in metrics or "pps" in metrics):
-                        sample = SessionInfoSample(
-                            timestamp=timestamp,
-                            kbps=metrics.get("kbps", 0.0),
-                            pps=metrics.get("pps", 0.0),
-                            success=True
-                        )
-                        consecutive_failures = 0
-                    else:
-                        sample = SessionInfoSample(
-                            timestamp=timestamp,
-                            kbps=0.0,
-                            pps=0.0,
-                            success=False,
-                            error="Failed to parse session info"
-                        )
-                        consecutive_failures += 1
-                else:
-                    sample = SessionInfoSample(
-                        timestamp=timestamp,
-                        kbps=0.0,
-                        pps=0.0,
-                        success=False,
-                        error=self.client.last_error
-                    )
-                    consecutive_failures += 1
-                
-                # Store sample with thread safety
-                with self.samples_lock:
-                    self.samples.append(sample)
-                    # Keep only recent samples (last 5 minutes worth)
-                    cutoff_time = timestamp - timedelta(minutes=5)
-                    self.samples = [s for s in self.samples if s.timestamp > cutoff_time]
-                
-                # Exit if too many consecutive failures
-                if consecutive_failures >= max_failures:
-                    LOG.error(f"{self.name}: Too many session sampling failures, stopping")
-                    break
-                
-            except Exception as e:
-                LOG.error(f"{self.name}: Session sampling error: {e}")
-                consecutive_failures += 1
-                if consecutive_failures >= max_failures:
-                    break
-            
-            # Sleep for remaining time to maintain 1-second intervals
-            elapsed = time.time() - start_time
-            sleep_time = max(0, 1.0 - elapsed)
-            if sleep_time > 0:
-                self.stop_event.wait(sleep_time)
-    
-    def get_samples_since(self, since_time: datetime) -> List[SessionInfoSample]:
-        """Get all samples since the given time"""
-        with self.samples_lock:
-            return [s for s in self.samples if s.timestamp >= since_time]
 
 class EnhancedFirewallCollector:
     """Enhanced collector optimized for your specific PAN-OS 11 system"""
@@ -616,10 +661,6 @@ class EnhancedFirewallCollector:
         self.last_poll_time = None
         self.poll_count = 0
         
-        # Session info sampler
-        self.session_sampler = SessionInfoSampler(name, self.client)
-        self.last_collection_time = datetime.now(timezone.utc)
-        
         # Interface monitoring
         interface_configs = getattr(config, 'interface_configs', None)
         if not interface_configs:
@@ -634,8 +675,6 @@ class EnhancedFirewallCollector:
         success = self.client.keygen(self.config.username, self.config.password)
         if success:
             self.authenticated = True
-            # Start session sampling after authentication
-            self.session_sampler.start_sampling()
             
             # Start interface monitoring
             self.interface_monitor.start_monitoring()
@@ -663,59 +702,92 @@ class EnhancedFirewallCollector:
             LOG.warning(f"Failed to save XML for {self.name}: {e}")
     
     def collect_management_cpu_your_panos11(self) -> Dict[str, float]:
-        """Collect Management CPU - SKIP unsupported commands on your PAN-OS 11"""
-        # Based on debug results, your PAN-OS 11 doesn't support:
-        # - <show><s><info/></s></show>
-        # - <request><s><debug><status/></debug></s></request>
-        #
-        # We'll return empty for now and focus on working data plane CPU
+        """
+        Collect Management CPU using multiple methods with fallback
+        Priority: debug status > system info > system resources (top)
+        """
+        cpu_metrics = {}
         
-        LOG.info(f"{self.name}: Management CPU collection not supported on this PAN-OS 11 system")
-        LOG.info(f"{self.name}: Focus will be on data plane CPU which is working")
+        # Method 1: Debug status (most accurate - matches GUI)
+        try:
+            LOG.info(f"{self.name}: Attempting Method 1 - Debug status")
+            xml = self.client.request("<request><s><debug><status/></debug></s></request>")
+            if xml and 'status="success"' in xml:
+                self._save_raw_xml("debug_status", xml)
+                metrics, msg = parse_cpu_from_debug_status(xml)
+                if metrics and "mgmt_cpu" in metrics:
+                    # Keep mgmt_cpu to match database schema
+                    cpu_metrics.update(metrics)  # Include all fields (mgmt_cpu, mgmt_cpu_debug, etc.)
+                    LOG.info(f"{self.name}: ✅ Method 1 SUCCESS - {msg}")
+                    LOG.info(f"{self.name}: Management CPU value: {cpu_metrics['mgmt_cpu']:.2f}%")
+                    return cpu_metrics  # Return immediately if successful
+                else:
+                    LOG.debug(f"{self.name}: Method 1 failed to parse: {msg}")
+            else:
+                LOG.debug(f"{self.name}: Method 1 failed: {self.client.last_error}")
+        except Exception as e:
+            LOG.debug(f"{self.name}: Method 1 exception: {e}")
         
-        # Return empty dict - data plane CPU will provide the main CPU metrics
+        # Method 2: System info with load average
+        try:
+            LOG.info(f"{self.name}: Attempting Method 2 - System info")
+            xml = self.client.op("<show><system><info/></system></show>")
+            if xml and 'status="success"' in xml:
+                self._save_raw_xml("system_info", xml)
+                metrics, msg = parse_cpu_from_system_info(xml)
+                if metrics and "mgmt_cpu" in metrics:
+                    # Keep mgmt_cpu to match database schema
+                    cpu_metrics.update(metrics)  # Include all fields
+                    LOG.info(f"{self.name}: ✅ Method 2 SUCCESS - {msg}")
+                    LOG.info(f"{self.name}: Management CPU value: {cpu_metrics['mgmt_cpu']:.2f}%")
+                    return cpu_metrics  # Return immediately if successful
+                else:
+                    LOG.debug(f"{self.name}: Method 2 failed to parse: {msg}")
+            else:
+                LOG.debug(f"{self.name}: Method 2 failed: {self.client.last_error}")
+        except Exception as e:
+            LOG.debug(f"{self.name}: Method 2 exception: {e}")
+        
+        # Method 3: System resources (top) - fallback
+        try:
+            LOG.info(f"{self.name}: Attempting Method 3 - System resources (top)")
+            xml = self.client.op("<show><system><resources/></system></show>")
+            if xml:
+                self._save_raw_xml("system_resources", xml)
+                
+                # Try the new parser first
+                metrics, msg = parse_management_cpu_from_system_resources(xml)
+                if metrics and "management_cpu" in metrics and metrics["management_cpu"] > 0:
+                    # Rename management_cpu to mgmt_cpu to match database schema
+                    cpu_metrics["mgmt_cpu"] = metrics["management_cpu"]
+                    # Also include user/sys if present
+                    if "management_cpu_user" in metrics:
+                        cpu_metrics["cpu_user"] = metrics["management_cpu_user"]
+                    if "management_cpu_sys" in metrics:
+                        cpu_metrics["cpu_system"] = metrics["management_cpu_sys"]
+                    LOG.info(f"{self.name}: ✅ Method 3a SUCCESS - {msg}")
+                    LOG.info(f"{self.name}: Management CPU value: {cpu_metrics['mgmt_cpu']:.2f}%")
+                    return cpu_metrics
+                else:
+                    LOG.debug(f"{self.name}: Method 3a returned zero or no data: {msg}")
+                
+                # Fall back to the enhanced top parser
+                metrics, msg = parse_cpu_from_top(xml)
+                if metrics and "mgmt_cpu" in metrics:
+                    # Keep mgmt_cpu to match database schema
+                    cpu_metrics.update(metrics)  # Include cpu_user, cpu_system, cpu_idle, mgmt_cpu
+                    LOG.info(f"{self.name}: ✅ Method 3b SUCCESS - {msg}")
+                    LOG.info(f"{self.name}: Management CPU value: {cpu_metrics['mgmt_cpu']:.2f}%")
+                    return cpu_metrics
+                else:
+                    LOG.debug(f"{self.name}: Method 3b failed to parse: {msg}")
+            else:
+                LOG.warning(f"{self.name}: Method 3 failed to get XML: {self.client.last_error}")
+        except Exception as e:
+            LOG.warning(f"{self.name}: Method 3 exception: {e}")
+        
+        LOG.error(f"{self.name}: ❌ ALL CPU MONITORING METHODS FAILED")
         return {}
-    
-    def collect_session_info_aggregated(self) -> Dict[str, float]:
-        """Collect aggregated session info from per-second samples"""
-        current_time = datetime.now(timezone.utc)
-        
-        # Get samples since last collection
-        samples = self.session_sampler.get_samples_since(self.last_collection_time)
-        
-        if not samples:
-            LOG.debug(f"{self.name}: No session info samples available for aggregation")
-            return {}
-        
-        # Aggregate the samples
-        aggregates = aggregate_session_info_samples(samples)
-        
-        # Convert to enhanced metrics dictionary
-        metrics = {
-            # Original metrics (backward compatibility)
-            "throughput_mbps_total": aggregates.kbps_mean / 1000.0,
-            "pps_total": aggregates.pps_mean,
-            
-            # Enhanced throughput statistics
-            "throughput_mbps_max": aggregates.kbps_max / 1000.0,
-            "throughput_mbps_min": aggregates.kbps_min / 1000.0,
-            "throughput_mbps_p95": aggregates.kbps_p95 / 1000.0,
-            
-            # Enhanced PPS statistics
-            "pps_max": aggregates.pps_max,
-            "pps_min": aggregates.pps_min,
-            "pps_p95": aggregates.pps_p95,
-            
-            # Sampling metadata
-            "session_sample_count": aggregates.sample_count,
-            "session_success_rate": aggregates.success_rate,
-            "session_sampling_period": aggregates.sampling_period
-        }
-        
-        # Update last collection time
-        self.last_collection_time = current_time
-        
-        return metrics
 
     def collect_metrics(self) -> CollectionResult:
         """Enhanced metrics collection optimized for your PAN-OS 11"""
@@ -733,8 +805,14 @@ class EnhancedFirewallCollector:
         timestamp = datetime.now(timezone.utc)
         self.poll_count += 1
         
-        # Skip management CPU (not supported on your system)
-        # Focus on working features
+        # Management CPU using system resources command
+        try:
+            mgmt_cpu_metrics = self.collect_management_cpu_your_panos11()
+            if mgmt_cpu_metrics:
+                metrics.update(mgmt_cpu_metrics)
+                LOG.debug(f"{self.name}: Management CPU collected: {mgmt_cpu_metrics.get('management_cpu', 0):.1f}%")
+        except Exception as e:
+            LOG.warning(f"{self.name}: Management CPU collection error: {e}")
         
         # Data plane CPU and packet buffer using WORKING resource monitor
         try:
@@ -755,13 +833,6 @@ class EnhancedFirewallCollector:
                 LOG.warning(f"{self.name}: Failed to get resource monitor: {self.client.last_error}")
         except Exception as e:
             LOG.warning(f"{self.name}: Resource monitor error: {e}")
-        
-        # Aggregated session info using WORKING session command
-        try:
-            session_metrics = self.collect_session_info_aggregated()
-            metrics.update(session_metrics)
-        except Exception as e:
-            LOG.warning(f"{self.name}: Session info aggregation error: {e}")
         
         # Collect interface metrics using WORKING interface command
         try:
@@ -815,7 +886,6 @@ class EnhancedFirewallCollector:
     
     def stop(self):
         """Stop the collector and all monitoring"""
-        self.session_sampler.stop_sampling()
         self.interface_monitor.stop_monitoring()
 
 # Use the existing MultiFirewallCollector structure but with our updated collector
@@ -1010,20 +1080,6 @@ class MultiFirewallCollector:
                 }
             }
             
-            # Add session sampler status
-            samples_count = 0
-            last_sample_time = None
-            with collector.session_sampler.samples_lock:
-                samples_count = len(collector.session_sampler.samples)
-                if collector.session_sampler.samples:
-                    last_sample_time = collector.session_sampler.samples[-1].timestamp.isoformat()
-            
-            basic_status.update({
-                'session_sampler_running': collector.session_sampler.running,
-                'session_samples_count': samples_count,
-                'last_session_sample': last_sample_time
-            })
-            
             # Add interface monitoring status
             available_interfaces = collector.interface_monitor.get_available_interfaces()
             basic_status.update({
@@ -1063,12 +1119,12 @@ if __name__ == "__main__":
     # When run directly
     print("Updated collectors for your specific PAN-OS 11 system ready")
     print("Optimizations based on debug results:")
+    print("✅ Debug Status: Priority method for management CPU (GUI-accurate)")
+    print("✅ System Info: Fallback #1 for management CPU (load average)")
+    print("✅ System Resources: Fallback #2 for management CPU (top)")
     print("✅ Resource Monitor: Working - used for DP CPU & packet buffer")
-    print("✅ Session Info: Working - used for throughput")
     print("✅ Interface Statistics: Working - used for bandwidth")
-    print("❌ Debug Status: Not supported - management CPU disabled")
-    print("❌ System Info: Not supported - skipped")
-    print("🎯 Focus: Data plane CPU, throughput, and interface monitoring")
+    print("🎯 Focus: Multi-method CPU collection and interface monitoring")
     
     # Also test the main function
     main()
