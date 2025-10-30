@@ -586,34 +586,6 @@ firewalls:
       - "ha2"
       - "ethernet1/8"    # Exclude specific interface
   
-  # Method 4: Mixed approach - some specific configs + auto-discovery
-  hybrid_fw:
-    host: "https://192.168.3.1"
-    username: "admin"
-    password: "YourPassword"
-    verify_ssl: false
-    enabled: true
-    poll_interval: 30
-    dp_aggregation: "p95"
-    
-    interface_monitoring: true
-    auto_discover_interfaces: true  # Will discover additional interfaces
-    # Specific configurations for important interfaces
-    interface_configs:
-      - name: "ethernet1/1"
-        display_name: "Critical WAN Link"
-        enabled: true
-        description: "Primary internet - critical monitoring"
-      - name: "ethernet1/2"
-        display_name: "Core LAN"
-        enabled: true
-        description: "Core internal network"
-    # Auto-discovery will find and add other interfaces automatically
-    exclude_interfaces:
-      - "mgmt"
-      - "loopback"
-      - "tunnel"
-  
   # Legacy method: No interface monitoring (backward compatibility)
   legacy_fw:
     host: "https://192.168.4.1"
@@ -643,6 +615,11 @@ firewalls:
 # 5. Mix and match: Use auto_discover + interface_configs for hybrid approach
 """
     return example_config
+
+# Backward compatibility function
+def create_example_config() -> str:
+    """Backward compatibility for create_example_config"""
+    return create_enhanced_example_config()
 
 if __name__ == "__main__":
     # Example usage

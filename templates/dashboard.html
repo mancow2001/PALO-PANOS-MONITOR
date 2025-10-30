@@ -1,10 +1,9 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PAN-OS Multi-Firewall Monitor</title>
+    <title>Enhanced PAN-OS Multi-Firewall Monitor</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -29,9 +28,24 @@
             font-size: 2.2em;
             font-weight: 700;
         }
+        .enhancement-badge {
+            display: inline-block;
+            background: #27ae60;
+            color: white;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 0.7em;
+            font-weight: bold;
+            margin-left: 10px;
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+        }
         .firewall-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+            grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
             gap: 20px;
             margin-bottom: 20px;
         }
@@ -66,10 +80,6 @@
         .status-online { background: #27ae60; animation: pulse 2s infinite; }
         .status-offline { background: #e74c3c; }
         .status-unknown { background: #95a5a6; }
-        @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.5; }
-        }
         .metrics-summary {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(80px, 1fr));
@@ -91,6 +101,26 @@
             font-size: 1.1em;
             font-weight: 600;
             color: #2c3e50;
+        }
+        .enhanced-metrics {
+            background: rgba(39, 174, 96, 0.1);
+            border: 1px solid #27ae60;
+            border-radius: 8px;
+            padding: 10px;
+            margin: 10px 0;
+        }
+        .enhanced-label {
+            font-size: 0.7em;
+            color: #27ae60;
+            font-weight: bold;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 5px;
+        }
+        .interface-summary {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 8px;
         }
         .view-button {
             display: inline-block;
@@ -160,8 +190,8 @@
 <body>
     <div class="container">
         <div class="header">
-            <h1>🔥 PAN-OS Multi-Firewall Monitor</h1>
-            <p>Real-time monitoring dashboard for multiple Palo Alto Networks firewalls</p>
+            <h1>🔥 Enhanced PAN-OS Multi-Firewall Monitor <span class="enhancement-badge">ENHANCED</span></h1>
+            <p>Real-time monitoring with accurate interface bandwidth and session tracking</p>
         </div>
 
         {% if database_stats %}
@@ -170,7 +200,15 @@
             <div class="stats-grid">
                 <div class="stat-card">
                     <div class="stat-number">{{ database_stats.total_metrics }}</div>
-                    <div class="stat-label">Total Metrics</div>
+                    <div class="stat-label">Session Metrics</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">{{ database_stats.interface_metrics_count or 0 }}</div>
+                    <div class="stat-label">Interface Metrics</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">{{ database_stats.session_statistics_count or 0 }}</div>
+                    <div class="stat-label">Session Statistics</div>
                 </div>
                 <div class="stat-card">
                     <div class="stat-number">{{ firewalls|length }}</div>
@@ -212,18 +250,58 @@
                         </div>
                     </div>
                     <div class="metric-item">
-                        <div class="metric-label">Throughput</div>
+                        <div class="metric-label">Session Tput</div>
                         <div class="metric-value">
                             {{ "%.0f"|format(firewall.latest_metrics.throughput_mbps_total or 0) }} Mbps
                         </div>
                     </div>
                     <div class="metric-item">
-                        <div class="metric-label">PPS</div>
+                        <div class="metric-label">Session PPS</div>
                         <div class="metric-value">
                             {{ "{:,.0f}".format(firewall.latest_metrics.pps_total or 0) }}
                         </div>
                     </div>
                 </div>
+                
+                {% if firewall.interface_summary %}
+                <div class="enhanced-metrics">
+                    <div class="enhanced-label">🌐 Interface Bandwidth - {{ firewall.interface_summary.interface_count }} Monitored</div>
+                    <div class="interface-summary">
+                        <div class="metric-item">
+                            <div class="metric-label">Total RX</div>
+                            <div class="metric-value">{{ "%.1f"|format(firewall.interface_summary.total_rx or 0) }} Mbps</div>
+                        </div>
+                        <div class="metric-item">
+                            <div class="metric-label">Total TX</div>
+                            <div class="metric-value">{{ "%.1f"|format(firewall.interface_summary.total_tx or 0) }} Mbps</div>
+                        </div>
+                    </div>
+                    {% if firewall.interface_summary.monitored_interfaces %}
+                    <div style="font-size: 0.8em; color: #27ae60; margin-top: 5px;">
+                        {{ firewall.interface_summary.monitored_interfaces|join(", ") }}
+                        {% if firewall.interface_summary.total_interfaces > firewall.interface_summary.interface_count %}
+                        + {{ firewall.interface_summary.total_interfaces - firewall.interface_summary.interface_count }} more
+                        {% endif %}
+                    </div>
+                    {% endif %}
+                </div>
+                {% endif %}
+                
+                {% if firewall.session_summary %}
+                <div class="enhanced-metrics">
+                    <div class="enhanced-label">🔗 Session Statistics</div>
+                    <div class="interface-summary">
+                        <div class="metric-item">
+                            <div class="metric-label">Active Sessions</div>
+                            <div class="metric-value">{{ "{:,}".format(firewall.session_summary.active_sessions or 0) }}</div>
+                        </div>
+                        <div class="metric-item">
+                            <div class="metric-label">Utilization</div>
+                            <div class="metric-value">{{ "%.1f"|format(firewall.session_summary.session_utilization or 0) }}%</div>
+                        </div>
+                    </div>
+                </div>
+                {% endif %}
                 
                 <p style="font-size: 0.8em; color: #7f8c8d; margin: 10px 0;">
                     Last updated: {{ firewall.last_update }}
@@ -250,11 +328,10 @@
     </div>
 
     <script>
-        // Auto-refresh every 60 seconds
+        // Auto-refresh every 30 seconds
         setTimeout(() => {
             window.location.reload();
         }, 30000);
     </script>
 </body>
 </html>
-        

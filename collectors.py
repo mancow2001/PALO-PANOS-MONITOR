@@ -23,7 +23,7 @@ import urllib3
 
 # Import our interface monitoring module
 from interface_monitor import (
-    InterfaceMonitor, InterfaceConfig, create_default_interface_configs,
+    InterfaceMonitor, InterfaceConfig,
     parse_interface_statistics, parse_session_statistics
 )
 
@@ -68,6 +68,38 @@ class SessionInfoAggregates:
     pps_p95: float = 0.0
     sampling_period: float = 0.0
     success_rate: float = 0.0
+
+def create_default_interface_configs() -> List[InterfaceConfig]:
+    """Create default interface configurations for common PAN-OS interfaces"""
+    return [
+        InterfaceConfig(
+            name="ethernet1/1",
+            display_name="Internet/WAN",
+            description="Primary internet connection"
+        ),
+        InterfaceConfig(
+            name="ethernet1/2",
+            display_name="LAN/Internal",
+            description="Internal network connection"
+        ),
+        InterfaceConfig(
+            name="ethernet1/3",
+            display_name="DMZ",
+            description="DMZ network connection"
+        ),
+        InterfaceConfig(
+            name="ae1",
+            display_name="Aggregate 1",
+            description="Link aggregation group 1",
+            enabled=False  # Disabled by default for auto-discovery
+        ),
+        InterfaceConfig(
+            name="ae2",
+            display_name="Aggregate 2",
+            description="Link aggregation group 2",
+            enabled=False  # Disabled by default for auto-discovery
+        )
+    ]
 
 class PanOSClient:
     """PAN-OS API client for a single firewall"""
@@ -464,7 +496,7 @@ class EnhancedFirewallCollector:
             # Use default interface configs if not specified
             interface_configs = create_default_interface_configs()
         
-        self.interface_monitor = InterfaceMonitor(name, self.client, interface_configs)
+        self.interface_monitor = InterfaceMonitor(name, self.client, config)
         
         LOG.info(f"{self.name}: Enhanced collector initialized with interface monitoring")
         
@@ -630,7 +662,7 @@ class EnhancedFirewallCollector:
         except Exception as e:
             LOG.warning(f"{self.name}: Interface metrics collection error: {e}")
         
-        # NEW: Collect session statistics  
+        # NEW: Collect session statistics
         try:
             latest_session_stats = self.interface_monitor.get_latest_session_stats()
             if latest_session_stats:

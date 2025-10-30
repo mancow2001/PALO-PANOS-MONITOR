@@ -41,371 +41,32 @@ class EnhancedWebDashboard:
         self.templates_dir.mkdir(exist_ok=True)
         self.templates = Jinja2Templates(directory=str(self.templates_dir))
         
-        self._create_enhanced_templates()
+        self._verify_templates()
         self._setup_enhanced_routes()
     
-    def _create_enhanced_templates(self):
-        """Create enhanced HTML templates with interface monitoring"""
+    def _verify_templates(self):
+        """Verify HTML templates exist in the templates directory"""
         
-        # Enhanced main dashboard template
-        dashboard_html = """
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Enhanced PAN-OS Multi-Firewall Monitor</title>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            color: #333;
-        }
-        .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
-        .header {
-            background: rgba(255,255,255,0.95);
-            border-radius: 15px;
-            padding: 25px;
-            margin-bottom: 20px;
-            box-shadow: 0 8px 32px rgba(0,0,0,0.1);
-            backdrop-filter: blur(10px);
-        }
-        .header h1 {
-            color: #2c3e50;
-            margin-bottom: 10px;
-            font-size: 2.2em;
-            font-weight: 700;
-        }
-        .enhancement-badge {
-            display: inline-block;
-            background: #e74c3c;
-            color: white;
-            padding: 4px 8px;
-            border-radius: 4px;
-            font-size: 0.7em;
-            font-weight: bold;
-            margin-left: 10px;
-            animation: pulse 2s infinite;
-        }
-        @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.7; }
-        }
-        .firewall-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
-            gap: 20px;
-            margin-bottom: 20px;
-        }
-        .firewall-card {
-            background: rgba(255,255,255,0.95);
-            border-radius: 15px;
-            padding: 20px;
-            box-shadow: 0 8px 32px rgba(0,0,0,0.1);
-            backdrop-filter: blur(10px);
-            border: 1px solid rgba(255,255,255,0.2);
-            transition: transform 0.2s ease;
-            position: relative;
-        }
-        .firewall-card:hover { transform: translateY(-5px); }
-        .firewall-name {
-            font-size: 1.4em;
-            font-weight: 600;
-            margin-bottom: 10px;
-            color: #2c3e50;
-        }
-        .firewall-host {
-            font-size: 0.9em;
-            color: #7f8c8d;
-            margin-bottom: 15px;
-        }
-        .status-indicator {
-            display: inline-block;
-            width: 12px;
-            height: 12px;
-            border-radius: 50%;
-            margin-right: 8px;
-        }
-        .status-online { background: #27ae60; animation: pulse 2s infinite; }
-        .status-offline { background: #e74c3c; }
-        .status-unknown { background: #95a5a6; }
-        .metrics-summary {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
-            gap: 10px;
-            margin: 15px 0;
-        }
-        .metric-item {
-            text-align: center;
-            padding: 8px;
-            background: rgba(52, 152, 219, 0.1);
-            border-radius: 8px;
-        }
-        .metric-label {
-            font-size: 0.8em;
-            color: #7f8c8d;
-            margin-bottom: 4px;
-        }
-        .metric-value {
-            font-size: 1.1em;
-            font-weight: 600;
-            color: #2c3e50;
-        }
-        .enhanced-metrics {
-            background: rgba(39, 174, 96, 0.1);
-            border: 1px solid #27ae60;
-            border-radius: 8px;
-            padding: 10px;
-            margin: 10px 0;
-        }
-        .enhanced-label {
-            font-size: 0.7em;
-            color: #27ae60;
-            font-weight: bold;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            margin-bottom: 5px;
-        }
-        .interface-summary {
-            display: grid;
-            grid-template-columns: repeat(2, 1fr);
-            gap: 8px;
-        }
-        .view-button {
-            display: inline-block;
-            padding: 10px 20px;
-            background: #3498db;
-            color: white;
-            text-decoration: none;
-            border-radius: 8px;
-            font-weight: 500;
-            transition: background 0.2s ease;
-            margin-top: 15px;
-        }
-        .view-button:hover { 
-            background: #2980b9; 
-            text-decoration: none;
-            color: white;
-        }
-        .stats-section {
-            background: rgba(255,255,255,0.95);
-            border-radius: 15px;
-            padding: 20px;
-            margin-bottom: 20px;
-            box-shadow: 0 8px 32px rgba(0,0,0,0.1);
-        }
-        .stats-section h2 {
-            color: #2c3e50;
-            margin-bottom: 20px;
-            font-size: 1.5em;
-        }
-        .stats-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 15px;
-        }
-        .stat-card {
-            text-align: center;
-            padding: 15px;
-            background: rgba(52, 152, 219, 0.1);
-            border-radius: 10px;
-        }
-        .stat-number {
-            font-size: 2em;
-            font-weight: 700;
-            margin-bottom: 5px;
-            color: #2980b9;
-        }
-        .stat-label {
-            font-size: 0.9em;
-            color: #7f8c8d;
-        }
-        .cpu-high { color: #e74c3c; }
-        .cpu-medium { color: #f39c12; }
-        .cpu-low { color: #27ae60; }
-        .no-firewalls {
-            text-align: center;
-            padding: 40px;
-        }
-        .no-firewalls h2 {
-            color: #2c3e50;
-            margin-bottom: 10px;
-        }
-        .no-firewalls p {
-            color: #7f8c8d;
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="header">
-            <h1>🔥 Enhanced PAN-OS Multi-Firewall Monitor <span class="enhancement-badge">NEW</span></h1>
-            <p>Real-time monitoring with accurate interface bandwidth and session tracking</p>
-        </div>
-
-        {% if database_stats %}
-        <div class="stats-section">
-            <h2>📊 Enhanced System Statistics</h2>
-            <div class="stats-grid">
-                <div class="stat-card">
-                    <div class="stat-number">{{ database_stats.total_metrics }}</div>
-                    <div class="stat-label">Session Metrics</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-number">{{ database_stats.interface_metrics_count or 0 }}</div>
-                    <div class="stat-label">Interface Metrics</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-number">{{ database_stats.session_statistics_count or 0 }}</div>
-                    <div class="stat-label">Session Statistics</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-number">{{ firewalls|length }}</div>
-                    <div class="stat-label">Monitored Firewalls</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-number">{{ database_stats.database_size_mb }}</div>
-                    <div class="stat-label">Database Size (MB)</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-number">{{ uptime_hours }}</div>
-                    <div class="stat-label">Uptime (Hours)</div>
-                </div>
-            </div>
-        </div>
-        {% endif %}
-
-        <div class="firewall-grid">
-            {% for firewall in firewalls %}
-            <div class="firewall-card">
-                <div class="firewall-name">
-                    <span class="status-indicator {{ firewall.status_class }}"></span>
-                    {{ firewall.name }}
-                </div>
-                <div class="firewall-host">{{ firewall.host }}</div>
-                
-                {% if firewall.latest_metrics %}
-                <div class="metrics-summary">
-                    <div class="metric-item">
-                        <div class="metric-label">Mgmt CPU</div>
-                        <div class="metric-value {{ firewall.mgmt_cpu_class }}">
-                            {{ "%.1f"|format(firewall.latest_metrics.mgmt_cpu or 0) }}%
-                        </div>
-                    </div>
-                    <div class="metric-item">
-                        <div class="metric-label">DP CPU</div>
-                        <div class="metric-value {{ firewall.dp_cpu_class }}">
-                            {{ "%.1f"|format(firewall.latest_metrics.data_plane_cpu or 0) }}%
-                        </div>
-                    </div>
-                    <div class="metric-item">
-                        <div class="metric-label">Session Tput</div>
-                        <div class="metric-value">
-                            {{ "%.0f"|format(firewall.latest_metrics.throughput_mbps_total or 0) }} Mbps
-                        </div>
-                    </div>
-                    <div class="metric-item">
-                        <div class="metric-label">Session PPS</div>
-                        <div class="metric-value">
-                            {{ "{:,.0f}".format(firewall.latest_metrics.pps_total or 0) }}
-                        </div>
-                    </div>
-                </div>
-                
-                {% if firewall.interface_summary %}
-                <div class="enhanced-metrics">
-                    <div class="enhanced-label">Interface Bandwidth (Accurate) - {{ firewall.interface_summary.interface_count }} Monitored</div>
-                    <div class="interface-summary">
-                        <div class="metric-item">
-                            <div class="metric-label">Total RX</div>
-                            <div class="metric-value">{{ "%.1f"|format(firewall.interface_summary.total_rx or 0) }} Mbps</div>
-                        </div>
-                        <div class="metric-item">
-                            <div class="metric-label">Total TX</div>
-                            <div class="metric-value">{{ "%.1f"|format(firewall.interface_summary.total_tx or 0) }} Mbps</div>
-                        </div>
-                    </div>
-                    {% if firewall.interface_summary.monitored_interfaces %}
-                    <div style="font-size: 0.8em; color: #27ae60; margin-top: 5px;">
-                        Monitoring: {{ firewall.interface_summary.monitored_interfaces|join(", ") }}
-                        {% if firewall.interface_summary.total_interfaces > firewall.interface_summary.interface_count %}
-                        + {{ firewall.interface_summary.total_interfaces - firewall.interface_summary.interface_count }} more
-                        {% endif %}
-                    </div>
-                    {% endif %}
-                </div>
-                {% endif %}
-                
-                {% if firewall.session_summary %}
-                <div class="enhanced-metrics">
-                    <div class="enhanced-label">Session Statistics</div>
-                    <div class="interface-summary">
-                        <div class="metric-item">
-                            <div class="metric-label">Active Sessions</div>
-                            <div class="metric-value">{{ "{:,}".format(firewall.session_summary.active_sessions or 0) }}</div>
-                        </div>
-                        <div class="metric-item">
-                            <div class="metric-label">Utilization</div>
-                            <div class="metric-value">{{ "%.1f"|format(firewall.session_summary.session_utilization or 0) }}%</div>
-                        </div>
-                    </div>
-                </div>
-                {% endif %}
-                
-                <p style="font-size: 0.8em; color: #7f8c8d; margin: 10px 0;">
-                    Last updated: {{ firewall.last_update }}
-                </p>
-                {% else %}
-                <p style="color: #e74c3c;">No metrics available</p>
-                {% endif %}
-                
-                <a href="/firewall/{{ firewall.name }}" class="view-button">
-                    📊 View Enhanced Details
-                </a>
-            </div>
-            {% endfor %}
-        </div>
-
-        {% if not firewalls %}
-        <div class="stats-section">
-            <div class="no-firewalls">
-                <h2>No Firewalls Configured</h2>
-                <p>Add firewall configurations to start enhanced monitoring.</p>
-            </div>
-        </div>
-        {% endif %}
-    </div>
-
-    <script>
-        // Auto-refresh every 30 seconds for enhanced monitoring
-        setTimeout(() => {
-            window.location.reload();
-        }, 30000);
-    </script>
-</body>
-</html>
-        """
+        # Check if templates exist
+        dashboard_path = self.templates_dir / "dashboard.html"
+        detail_path = self.templates_dir / "firewall_detail.html"
         
-        # Load the enhanced firewall detail template from the file we created
-        try:
-            with open('/mnt/user-data/outputs/enhanced_firewall_detail.html', 'r') as f:
-                firewall_detail_html = f.read()
-        except FileNotFoundError:
-            # Fallback basic template if file not found
-            firewall_detail_html = """
-<!DOCTYPE html>
-<html><head><title>Enhanced Firewall Detail</title></head>
-<body><h1>Enhanced firewall detail template not found</h1></body></html>
-            """
+        if not dashboard_path.exists():
+            LOG.error(f"Dashboard template not found at {dashboard_path}")
+            LOG.error("Please ensure dashboard.html exists in the templates directory")
+            raise FileNotFoundError(f"Required template not found: {dashboard_path}")
+        else:
+            LOG.info(f"Using dashboard template: {dashboard_path}")
         
-        # Write templates to files
-        (self.templates_dir / "dashboard.html").write_text(dashboard_html)
-        (self.templates_dir / "firewall_detail.html").write_text(firewall_detail_html)
+        if not detail_path.exists():
+            LOG.error(f"Firewall detail template not found at {detail_path}")
+            LOG.error("Please ensure firewall_detail.html exists in the templates directory")
+            raise FileNotFoundError(f"Required template not found: {detail_path}")
+        else:
+            LOG.info(f"Using firewall detail template: {detail_path}")
         
-        LOG.info(f"Created enhanced templates in {self.templates_dir}")
+        LOG.info(f"Templates directory: {self.templates_dir}")
+        LOG.info("All required templates found successfully")
     
     def _setup_enhanced_routes(self):
         """Setup enhanced FastAPI routes with interface monitoring"""
@@ -499,7 +160,7 @@ class EnhancedWebDashboard:
                             try:
                                 last_metric_time = datetime.fromisoformat(timestamp_str)
                             except:
-                                from enhanced_database import parse_iso_datetime
+                                from database import parse_iso_datetime
                                 last_metric_time = parse_iso_datetime(timestamp_str)
                         else:
                             last_metric_time = timestamp_str
@@ -556,7 +217,7 @@ class EnhancedWebDashboard:
                         try:
                             earliest = datetime.fromisoformat(earliest_str)
                         except:
-                            from enhanced_database import parse_iso_datetime
+                            from database import parse_iso_datetime
                             earliest = parse_iso_datetime(earliest_str)
                     else:
                         earliest = earliest_str
@@ -575,6 +236,8 @@ class EnhancedWebDashboard:
                 
             except Exception as e:
                 LOG.error(f"Enhanced dashboard error: {e}")
+                import traceback
+                traceback.print_exc()
                 return HTMLResponse(f"<h1>Error loading enhanced dashboard</h1><p>{e}</p>", status_code=500)
         
         @self.app.get("/firewall/{firewall_name}", response_class=HTMLResponse)
@@ -606,6 +269,8 @@ class EnhancedWebDashboard:
                 
             except Exception as e:
                 LOG.error(f"Enhanced firewall detail error: {e}")
+                import traceback
+                traceback.print_exc()
                 return HTMLResponse(f"<h1>Error loading enhanced firewall details</h1><p>{e}</p>", status_code=500)
         
         @self.app.get("/api/firewall/{firewall_name}/metrics")
@@ -623,14 +288,14 @@ class EnhancedWebDashboard:
                 
                 if start_time:
                     try:
-                        from enhanced_database import parse_iso_datetime
+                        from database import parse_iso_datetime
                         start_dt = parse_iso_datetime(start_time)
                     except Exception as e:
                         LOG.warning(f"Failed to parse start_time '{start_time}': {e}")
                 
                 if end_time:
                     try:
-                        from enhanced_database import parse_iso_datetime
+                        from database import parse_iso_datetime
                         end_dt = parse_iso_datetime(end_time)
                     except Exception as e:
                         LOG.warning(f"Failed to parse end_time '{end_time}': {e}")
@@ -660,14 +325,14 @@ class EnhancedWebDashboard:
                 
                 if start_time:
                     try:
-                        from enhanced_database import parse_iso_datetime
+                        from database import parse_iso_datetime
                         start_dt = parse_iso_datetime(start_time)
                     except Exception as e:
                         LOG.warning(f"Failed to parse start_time '{start_time}': {e}")
                 
                 if end_time:
                     try:
-                        from enhanced_database import parse_iso_datetime
+                        from database import parse_iso_datetime
                         end_dt = parse_iso_datetime(end_time)
                     except Exception as e:
                         LOG.warning(f"Failed to parse end_time '{end_time}': {e}")
@@ -765,14 +430,14 @@ class EnhancedWebDashboard:
                 
                 if start_time:
                     try:
-                        from enhanced_database import parse_iso_datetime
+                        from database import parse_iso_datetime
                         start_dt = parse_iso_datetime(start_time)
                     except Exception as e:
                         LOG.warning(f"Failed to parse start_time '{start_time}': {e}")
                 
                 if end_time:
                     try:
-                        from enhanced_database import parse_iso_datetime
+                        from database import parse_iso_datetime
                         end_dt = parse_iso_datetime(end_time)
                     except Exception as e:
                         LOG.warning(f"Failed to parse end_time '{end_time}': {e}")
@@ -879,7 +544,7 @@ class WebDashboard(EnhancedWebDashboard):
 
 if __name__ == "__main__":
     # Example usage
-    from enhanced_database import EnhancedMetricsDatabase
+    from database import EnhancedMetricsDatabase
     from config import ConfigManager
     
     # Create test database and config
@@ -907,3 +572,4 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         print("Shutting down...")
         dashboard.stop_server()
+
