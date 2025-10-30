@@ -169,16 +169,12 @@ class EnhancedWebDashboard:
                     last_update = "Never"
                     
                     if latest_metrics:
-                        # Handle timestamp parsing safely
+                        # Handle timestamp parsing safely (Python 3.6 compatible)
                         timestamp_str = latest_metrics['timestamp']
                         if isinstance(timestamp_str, str):
-                            if timestamp_str.endswith('Z'):
-                                timestamp_str = timestamp_str[:-1] + '+00:00'
-                            try:
-                                last_metric_time = datetime.fromisoformat(timestamp_str)
-                            except:
-                                from database import parse_iso_datetime
-                                last_metric_time = parse_iso_datetime(timestamp_str)
+                            # Use database's Python 3.6-compatible parser
+                            from database import parse_iso_datetime
+                            last_metric_time = parse_iso_datetime(timestamp_str)
                         else:
                             last_metric_time = timestamp_str
                         
@@ -229,13 +225,9 @@ class EnhancedWebDashboard:
                 if database_stats.get('earliest_metric'):
                     earliest_str = database_stats['earliest_metric']
                     if isinstance(earliest_str, str):
-                        if earliest_str.endswith('Z'):
-                            earliest_str = earliest_str[:-1] + '+00:00'
-                        try:
-                            earliest = datetime.fromisoformat(earliest_str)
-                        except:
-                            from database import parse_iso_datetime
-                            earliest = parse_iso_datetime(earliest_str)
+                        # Use database's Python 3.6-compatible parser
+                        from database import parse_iso_datetime
+                        earliest = parse_iso_datetime(earliest_str)
                     else:
                         earliest = earliest_str
                     
