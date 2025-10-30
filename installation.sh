@@ -479,7 +479,7 @@ copy_application_files() {
     print_info "Copying application files..."
     
     # List of required files
-    required_files=("main.py" "config.py" "database.py" "collectors.py" "web_dashboard.py", "interface_monitor.py")
+    required_files=("main.py" "config.py" "database.py" "collectors.py" "web_dashboard.py" "interface_monitor.py")
     
     # Check if files exist in current directory
     for file in "${required_files[@]}"; do
