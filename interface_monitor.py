@@ -99,7 +99,11 @@ def discover_interfaces_panos11(xml_text: str) -> List[str]:
         return []
 
 def parse_individual_interface_panos11(xml_text: str, interface_name: str) -> Optional[InterfaceSample]:
-    """Stage 2: Parse individual interface response with detailed counters"""
+    """Stage 2: Parse individual interface response with detailed counters
+    
+    Prioritizes hardware port counters (rx-bytes/tx-bytes) as they are the most accurate.
+    Falls back to ibytes/obytes if port counters are not available.
+    """
     timestamp = datetime.now(timezone.utc)
     
     if not xml_text or not xml_text.strip():
@@ -112,9 +116,9 @@ def parse_individual_interface_panos11(xml_text: str, interface_name: str) -> Op
             return InterfaceSample(timestamp=timestamp, interface_name=interface_name,
                                  rx_bytes=0, tx_bytes=0, rx_packets=0, tx_packets=0, success=False)
         
-        # Try ifnet counters first (more reliable for network stats)
-        ifnet_counters = root.find(".//counters/ifnet/entry")
+        # Locate counter sections
         hw_counters = root.find(".//counters/hw/entry")
+        ifnet_counters = root.find(".//counters/ifnet/entry")
         
         def safe_int_extract(parent, field_name, default=0):
             if parent is None:
@@ -129,41 +133,57 @@ def parse_individual_interface_panos11(xml_text: str, interface_name: str) -> Op
         
         rx_bytes = tx_bytes = rx_packets = tx_packets = rx_errors = tx_errors = 0
         
-        if ifnet_counters is not None:
+        # PRIORITY 1: Try hardware port counters first (most accurate)
+        if hw_counters is not None:
+            port_section = hw_counters.find("port")
+            if port_section is not None:
+                rx_bytes = safe_int_extract(port_section, "rx-bytes")
+                tx_bytes = safe_int_extract(port_section, "tx-bytes")
+                rx_packets = (safe_int_extract(port_section, "rx-unicast") +
+                            safe_int_extract(port_section, "rx-multicast") +
+                            safe_int_extract(port_section, "rx-broadcast"))
+                tx_packets = (safe_int_extract(port_section, "tx-unicast") +
+                            safe_int_extract(port_section, "tx-multicast") +
+                            safe_int_extract(port_section, "tx-broadcast"))
+                rx_errors = safe_int_extract(port_section, "rx-error")
+                tx_errors = safe_int_extract(port_section, "tx-error")
+                
+                LOG.debug(f"Interface {interface_name}: Using hardware port counters")
+            
+            # PRIORITY 2: If port counters are zero or unavailable, try hw ibytes/obytes
+            if rx_bytes == 0 and tx_bytes == 0:
+                rx_bytes = safe_int_extract(hw_counters, "ibytes")
+                tx_bytes = safe_int_extract(hw_counters, "obytes")
+                rx_packets = safe_int_extract(hw_counters, "ipackets")
+                tx_packets = safe_int_extract(hw_counters, "opackets")
+                rx_errors = safe_int_extract(hw_counters, "ierrors")
+                tx_errors = safe_int_extract(hw_counters, "idrops")
+                
+                if rx_bytes > 0 or tx_bytes > 0:
+                    LOG.debug(f"Interface {interface_name}: Using hardware ibytes/obytes counters")
+        
+        # PRIORITY 3: Fall back to ifnet counters if hw counters are not available or zero
+        if (rx_bytes == 0 and tx_bytes == 0) and ifnet_counters is not None:
             rx_bytes = safe_int_extract(ifnet_counters, "ibytes")
             tx_bytes = safe_int_extract(ifnet_counters, "obytes")
             rx_packets = safe_int_extract(ifnet_counters, "ipackets")
             tx_packets = safe_int_extract(ifnet_counters, "opackets")
             rx_errors = safe_int_extract(ifnet_counters, "ierrors")
             tx_errors = safe_int_extract(ifnet_counters, "idrops")
-        elif hw_counters is not None:
-            rx_bytes = safe_int_extract(hw_counters, "ibytes")
-            tx_bytes = safe_int_extract(hw_counters, "obytes")
-            rx_packets = safe_int_extract(hw_counters, "ipackets")
-            tx_packets = safe_int_extract(hw_counters, "opackets")
-            rx_errors = safe_int_extract(hw_counters, "ierrors")
-            tx_errors = safe_int_extract(hw_counters, "idrops")
             
-            # Try detailed port counters if basic ones are zero
-            if rx_bytes == 0 and tx_bytes == 0:
-                port_section = hw_counters.find("port")
-                if port_section is not None:
-                    rx_bytes = safe_int_extract(port_section, "rx-bytes")
-                    tx_bytes = safe_int_extract(port_section, "tx-bytes")
-                    rx_packets = (safe_int_extract(port_section, "rx-unicast") +
-                                safe_int_extract(port_section, "rx-multicast") +
-                                safe_int_extract(port_section, "rx-broadcast"))
-                    tx_packets = (safe_int_extract(port_section, "tx-unicast") +
-                                safe_int_extract(port_section, "tx-multicast") +
-                                safe_int_extract(port_section, "tx-broadcast"))
+            if rx_bytes > 0 or tx_bytes > 0:
+                LOG.debug(f"Interface {interface_name}: Using ifnet counters")
         
-        LOG.info(f"Interface {interface_name}: RX={rx_bytes} bytes, TX={tx_bytes} bytes")
+        LOG.info(f"Interface {interface_name}: RX={rx_bytes} bytes, TX={tx_bytes} bytes, "
+                f"RX_pkts={rx_packets}, TX_pkts={tx_packets}")
         
         if rx_bytes > 0 or tx_bytes > 0 or rx_packets > 0 or tx_packets > 0:
             return InterfaceSample(timestamp=timestamp, interface_name=interface_name,
                                  rx_bytes=rx_bytes, tx_bytes=tx_bytes,
                                  rx_packets=rx_packets, tx_packets=tx_packets,
                                  rx_errors=rx_errors, tx_errors=tx_errors, success=True)
+        
+        LOG.warning(f"Interface {interface_name}: No valid counter data found")
         return None
         
     except Exception as e:
