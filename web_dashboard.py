@@ -253,19 +253,71 @@ class EnhancedWebDashboard:
         async def enhanced_firewall_detail(request: Request, firewall_name: str):
             """Enhanced detailed view for a specific firewall"""
             try:
-                # Get firewall config
+                LOG.info(f"Firewall detail page requested for: '{firewall_name}'")
+
+                # Get firewall config - try exact match first
                 firewall_config = self.config_manager.get_firewall(firewall_name)
+
                 if not firewall_config:
-                    raise HTTPException(status_code=404, detail="Firewall not found")
-                
+                    # Log all available firewalls for debugging
+                    all_firewalls = self.config_manager.list_firewalls()
+                    LOG.warning(f"Firewall '{firewall_name}' not found in config")
+                    LOG.warning(f"Available firewalls in config: {all_firewalls}")
+
+                    # Try case-insensitive match
+                    firewall_name_lower = firewall_name.lower()
+                    for fw_name in all_firewalls:
+                        if fw_name.lower() == firewall_name_lower:
+                            LOG.info(f"Found case-insensitive match: '{fw_name}' for '{firewall_name}'")
+                            firewall_config = self.config_manager.get_firewall(fw_name)
+                            firewall_name = fw_name  # Use the correct case
+                            break
+
+                if not firewall_config:
+                    # Check if firewall exists in database but not in config
+                    db_firewalls = self.database.get_all_firewalls()
+                    db_fw_names = [fw['name'] for fw in db_firewalls]
+                    LOG.warning(f"Firewalls in database: {db_fw_names}")
+
+                    # Provide helpful error message
+                    all_firewalls = self.config_manager.list_firewalls()
+                    error_html = f"""
+                    <html>
+                    <head><title>Firewall Not Found</title></head>
+                    <body style="font-family: Arial, sans-serif; padding: 40px; max-width: 800px; margin: 0 auto;">
+                        <h1 style="color: #e74c3c;">🔥 Firewall Not Found</h1>
+                        <p><strong>Requested firewall:</strong> <code>{firewall_name}</code></p>
+                        <h2>Available firewalls in configuration:</h2>
+                        <ul>
+                            {''.join(f'<li><a href="/firewall/{fw}">{fw}</a></li>' for fw in all_firewalls) if all_firewalls else '<li><em>No firewalls configured</em></li>'}
+                        </ul>
+                        <h2>Troubleshooting:</h2>
+                        <ul>
+                            <li>Check that the firewall name matches exactly (case-sensitive)</li>
+                            <li>Verify the firewall is defined in your config.yaml</li>
+                            <li>Ensure the firewall has <code>enabled: true</code> in the config</li>
+                            <li>Restart the service after config changes: <code>sudo systemctl restart panos-monitor</code></li>
+                        </ul>
+                        <p><a href="/">← Back to Dashboard</a></p>
+                    </body>
+                    </html>
+                    """
+                    return HTMLResponse(error_html, status_code=404)
+
+                # Check if firewall is disabled
+                if not firewall_config.enabled:
+                    LOG.warning(f"Firewall '{firewall_name}' is disabled in configuration")
+
                 # Default date range and times
                 now = datetime.now()
                 end_date = now.strftime("%Y-%m-%d")
                 start_date = (now - timedelta(days=1)).strftime("%Y-%m-%d")
-                
+
                 default_end_time = now.strftime("%H:%M")
                 default_start_time = (now - timedelta(hours=1)).strftime("%H:%M")
-                
+
+                LOG.info(f"Successfully loading detail page for firewall: '{firewall_name}' at {firewall_config.host}")
+
                 return self.templates.TemplateResponse("firewall_detail.html", {
                     "request": request,
                     "firewall_name": firewall_name,
@@ -275,7 +327,9 @@ class EnhancedWebDashboard:
                     "default_start_time": default_start_time,
                     "default_end_time": default_end_time
                 })
-                
+
+            except HTTPException:
+                raise  # Re-raise HTTP exceptions
             except Exception as e:
                 LOG.error(f"Enhanced firewall detail error: {e}")
                 import traceback
@@ -287,7 +341,7 @@ class EnhancedWebDashboard:
             firewall_name: str,
             start_time: Optional[str] = Query(None),
             end_time: Optional[str] = Query(None),
-            limit: Optional[int] = Query(500),
+            limit: Optional[int] = Query(None),
             user_timezone: Optional[str] = Query(None)
         ):
             """API endpoint to get metrics for a specific firewall (existing)"""
@@ -321,7 +375,7 @@ class EnhancedWebDashboard:
             firewall_name: str,
             start_time: Optional[str] = Query(None),
             end_time: Optional[str] = Query(None),
-            limit: Optional[int] = Query(500),
+            limit: Optional[int] = Query(None),
             user_timezone: Optional[str] = Query(None)
         ):
             """NEW: API endpoint to get interface metrics for a specific firewall"""
@@ -426,7 +480,7 @@ class EnhancedWebDashboard:
             firewall_name: str,
             start_time: Optional[str] = Query(None),
             end_time: Optional[str] = Query(None),
-            limit: Optional[int] = Query(500),
+            limit: Optional[int] = Query(None),
             user_timezone: Optional[str] = Query(None)
         ):
             """NEW: API endpoint to get session statistics for a specific firewall"""
