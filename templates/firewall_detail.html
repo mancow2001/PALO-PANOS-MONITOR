@@ -339,6 +339,103 @@
         .wide-metric-card {
             grid-column: 1 / -1;
         }
+        .hover-summary {
+            position: fixed;
+            top: 80px;
+            right: 20px;
+            background: rgba(255, 255, 255, 0.98);
+            border: 2px solid #3498db;
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.2);
+            min-width: 320px;
+            max-width: 400px;
+            display: none;
+            z-index: 1000;
+            backdrop-filter: blur(10px);
+            animation: slideIn 0.2s ease;
+        }
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateX(20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateX(0);
+            }
+        }
+        .hover-summary.visible {
+            display: block;
+        }
+        .hover-summary-header {
+            font-size: 1.1em;
+            font-weight: bold;
+            color: #2c3e50;
+            margin-bottom: 10px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #3498db;
+        }
+        .hover-summary-time {
+            font-size: 0.9em;
+            color: #7f8c8d;
+            margin-bottom: 15px;
+            font-weight: 500;
+        }
+        .hover-summary-section {
+            margin-bottom: 15px;
+        }
+        .hover-summary-section-title {
+            font-size: 0.85em;
+            font-weight: bold;
+            color: #34495e;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+        .hover-summary-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 5px 0;
+            border-bottom: 1px solid #ecf0f1;
+        }
+        .hover-summary-item:last-child {
+            border-bottom: none;
+        }
+        .hover-summary-label {
+            font-size: 0.9em;
+            color: #7f8c8d;
+        }
+        .hover-summary-value {
+            font-size: 0.95em;
+            font-weight: 600;
+            color: #2c3e50;
+        }
+        .hover-summary-close {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: none;
+            border: none;
+            font-size: 1.5em;
+            color: #95a5a6;
+            cursor: pointer;
+            padding: 0;
+            width: 30px;
+            height: 30px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 50%;
+            transition: all 0.2s;
+        }
+        .hover-summary-close:hover {
+            background: #ecf0f1;
+            color: #2c3e50;
+        }
         @media (max-width: 768px) {
             .metric-header {
                 flex-direction: column;
@@ -348,6 +445,15 @@
                 margin-top: 10px;
                 width: 100%;
                 justify-content: center;
+            }
+            .hover-summary {
+                position: fixed;
+                top: auto;
+                bottom: 0;
+                right: 0;
+                left: 0;
+                max-width: 100%;
+                border-radius: 12px 12px 0 0;
             }
         }
     </style>
@@ -477,6 +583,48 @@
         </div>
 
         <div class="timestamp" id="lastUpdate"></div>
+    </div>
+
+    <!-- Hover Summary Card -->
+    <div class="hover-summary" id="hoverSummary">
+        <button class="hover-summary-close" onclick="hideHoverSummary()">×</button>
+        <div class="hover-summary-header">📊 Metrics at Time Point</div>
+        <div class="hover-summary-time" id="hoverSummaryTime">--</div>
+
+        <div class="hover-summary-section">
+            <div class="hover-summary-section-title">🖥️ CPU Usage</div>
+            <div class="hover-summary-item">
+                <span class="hover-summary-label">Management CPU:</span>
+                <span class="hover-summary-value" id="hoverMgmtCpu">--</span>
+            </div>
+            <div class="hover-summary-item">
+                <span class="hover-summary-label" id="hoverDpCpuLabel">Data Plane CPU:</span>
+                <span class="hover-summary-value" id="hoverDpCpu">--</span>
+            </div>
+        </div>
+
+        <div class="hover-summary-section" id="hoverInterfaceSection" style="display: none;">
+            <div class="hover-summary-section-title">🌐 Interface Bandwidth</div>
+            <div id="hoverInterfaceData">
+                <!-- Populated dynamically -->
+            </div>
+        </div>
+
+        <div class="hover-summary-section" id="hoverSessionSection" style="display: none;">
+            <div class="hover-summary-section-title">🔗 Session Stats</div>
+            <div class="hover-summary-item">
+                <span class="hover-summary-label">Active Sessions:</span>
+                <span class="hover-summary-value" id="hoverActiveSessions">--</span>
+            </div>
+        </div>
+
+        <div class="hover-summary-section">
+            <div class="hover-summary-section-title">📦 Packet Buffer</div>
+            <div class="hover-summary-item">
+                <span class="hover-summary-label">Buffer Utilization:</span>
+                <span class="hover-summary-value" id="hoverPbuf">--</span>
+            </div>
+        </div>
     </div>
 
     <script>
@@ -929,7 +1077,7 @@
 
         function createChart(canvasId, datasets) {
             const ctx = document.getElementById(canvasId).getContext('2d');
-            return new Chart(ctx, {
+            const chart = new Chart(ctx, {
                 type: 'line',
                 data: {
                     labels: [],
@@ -964,14 +1112,38 @@
                     plugins: {
                         legend: {
                             display: false
+                        },
+                        tooltip: {
+                            enabled: true,
+                            mode: 'index',
+                            intersect: false,
+                            callbacks: {
+                                title: function(context) {
+                                    const date = new Date(context[0].parsed.x);
+                                    return date.toLocaleString();
+                                }
+                            }
                         }
                     },
                     interaction: {
                         intersect: false,
                         mode: 'index'
+                    },
+                    onHover: (event, activeElements, chart) => {
+                        if (activeElements.length > 0) {
+                            const dataIndex = activeElements[0].index;
+                            syncChartHover(chart, dataIndex);
+                        }
                     }
                 }
             });
+
+            // Add event listener for mouse leave
+            ctx.canvas.addEventListener('mouseleave', () => {
+                hideHoverSummary();
+            });
+
+            return chart;
         }
 
         function initCharts() {
@@ -1301,10 +1473,133 @@
                 clearInterval(refreshInterval);
                 refreshInterval = null;
             }
-            
+
             if (autoRefreshEnabled) {
                 refreshInterval = setInterval(refreshData, 60000);
             }
+        }
+
+        // Synchronized chart hover and hover summary functions
+        function syncChartHover(sourceChart, dataIndex) {
+            // Update all charts to show tooltip at the same index
+            Object.keys(charts).forEach(chartKey => {
+                const chart = charts[chartKey];
+                if (chart && chart !== sourceChart) {
+                    // Set active elements for all charts
+                    const activeElements = chart.data.datasets.map((dataset, datasetIndex) => ({
+                        datasetIndex: datasetIndex,
+                        index: dataIndex
+                    }));
+                    chart.setActiveElements(activeElements);
+                    chart.tooltip.setActiveElements(activeElements, {x: 0, y: 0});
+                    chart.update('none'); // Update without animation
+                }
+            });
+
+            // Update hover summary card
+            updateHoverSummary(dataIndex);
+        }
+
+        function updateHoverSummary(dataIndex) {
+            if (!lastFetchedData || lastFetchedData.length === 0) return;
+
+            // Get data at the specific index (remember data is reversed)
+            const reversedData = [...lastFetchedData].reverse();
+            if (dataIndex >= reversedData.length) return;
+
+            const dataPoint = reversedData[dataIndex];
+            const timestamp = new Date(dataPoint.timestamp);
+
+            // Update timestamp
+            document.getElementById('hoverSummaryTime').textContent = timestamp.toLocaleString();
+
+            // Update CPU values
+            document.getElementById('hoverMgmtCpu').innerHTML = `${formatValue(dataPoint.mgmt_cpu)} <span style="color: #95a5a6;">%</span>`;
+
+            let dpCpuValue, dpCpuLabel;
+            switch(currentCpuAggregation) {
+                case 'max':
+                    dpCpuValue = dataPoint.data_plane_cpu_max;
+                    dpCpuLabel = 'Data Plane CPU (Max):';
+                    break;
+                case 'p95':
+                    dpCpuValue = dataPoint.data_plane_cpu_p95;
+                    dpCpuLabel = 'Data Plane CPU (P95):';
+                    break;
+                default:
+                    dpCpuValue = dataPoint.data_plane_cpu_mean;
+                    dpCpuLabel = 'Data Plane CPU (Mean):';
+            }
+            document.getElementById('hoverDpCpuLabel').textContent = dpCpuLabel;
+            document.getElementById('hoverDpCpu').innerHTML = `${formatValue(dpCpuValue)} <span style="color: #95a5a6;">%</span>`;
+
+            // Update packet buffer
+            document.getElementById('hoverPbuf').innerHTML = `${formatValue(dataPoint.pbuf_util_percent)} <span style="color: #95a5a6;">%</span>`;
+
+            // Update interface data if available
+            const interfaceSection = document.getElementById('hoverInterfaceSection');
+            const interfaceDataDiv = document.getElementById('hoverInterfaceData');
+
+            if (selectedInterfaces.length > 0 && Object.keys(lastFetchedInterfaceData).length > 0) {
+                interfaceSection.style.display = 'block';
+                let interfaceHtml = '';
+
+                selectedInterfaces.forEach(interfaceName => {
+                    const interfaceData = lastFetchedInterfaceData[interfaceName];
+                    if (interfaceData && interfaceData.length > 0) {
+                        const reversedInterfaceData = [...interfaceData].reverse();
+                        if (dataIndex < reversedInterfaceData.length) {
+                            const interfacePoint = reversedInterfaceData[dataIndex];
+                            const displayName = getInterfaceDisplayName(interfaceName, window.currentInterfaceConfig);
+
+                            interfaceHtml += `
+                                <div class="hover-summary-item">
+                                    <span class="hover-summary-label">${displayName}:</span>
+                                    <span class="hover-summary-value">
+                                        ↓${formatValue(interfacePoint.rx_mbps)} / ↑${formatValue(interfacePoint.tx_mbps)} <span style="color: #95a5a6;">Mbps</span>
+                                    </span>
+                                </div>
+                            `;
+                        }
+                    }
+                });
+
+                interfaceDataDiv.innerHTML = interfaceHtml || '<div style="color: #95a5a6; font-style: italic; text-align: center;">No data at this point</div>';
+            } else {
+                interfaceSection.style.display = 'none';
+            }
+
+            // Update session statistics if available
+            const sessionSection = document.getElementById('hoverSessionSection');
+            if (lastFetchedSessionStats && lastFetchedSessionStats.length > 0) {
+                sessionSection.style.display = 'block';
+                const reversedSessionData = [...lastFetchedSessionStats].reverse();
+                if (dataIndex < reversedSessionData.length) {
+                    const sessionPoint = reversedSessionData[dataIndex];
+                    document.getElementById('hoverActiveSessions').innerHTML = `${formatValue(sessionPoint.active_sessions, 0)} <span style="color: #95a5a6;">sessions</span>`;
+                } else {
+                    document.getElementById('hoverActiveSessions').innerHTML = '<span style="color: #95a5a6;">--</span>';
+                }
+            } else {
+                sessionSection.style.display = 'none';
+            }
+
+            // Show the summary card
+            document.getElementById('hoverSummary').classList.add('visible');
+        }
+
+        function hideHoverSummary() {
+            document.getElementById('hoverSummary').classList.remove('visible');
+
+            // Clear all chart tooltips
+            Object.keys(charts).forEach(chartKey => {
+                const chart = charts[chartKey];
+                if (chart) {
+                    chart.setActiveElements([]);
+                    chart.tooltip.setActiveElements([], {x: 0, y: 0});
+                    chart.update('none');
+                }
+            });
         }
 
         // Event listeners
