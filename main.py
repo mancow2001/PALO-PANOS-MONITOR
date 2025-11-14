@@ -8,6 +8,8 @@ import logging
 import signal
 import sys
 import time
+import gc
+import psutil
 from pathlib import Path
 from typing import Optional
 
@@ -179,15 +181,47 @@ class PanOSMonitorApp:
         LOG.info("✅ Shutdown complete")
     
     def _run_monitoring_loop(self):
-        """Main monitoring loop"""
+        """Main monitoring loop with periodic garbage collection and memory monitoring"""
         try:
             # Print status periodically
             status_interval = 300  # 5 minutes
+            gc_interval = 300  # Run GC every 5 minutes
+            memory_check_interval = 60  # Check memory every minute
             last_status_time = 0
-            
+            last_gc_time = 0
+            last_memory_check = 0
+
+            # Get process for memory monitoring
+            process = psutil.Process()
+
             while not self.killer.kill_now:
                 current_time = time.time()
-                
+
+                # Run garbage collection periodically to prevent memory leaks
+                if current_time - last_gc_time >= gc_interval:
+                    collected = gc.collect()
+                    LOG.debug(f"🧹 Garbage collection: collected {collected} objects")
+                    last_gc_time = current_time
+
+                # Monitor memory usage
+                if current_time - last_memory_check >= memory_check_interval:
+                    try:
+                        mem_info = process.memory_info()
+                        mem_mb = mem_info.rss / (1024 * 1024)  # Convert to MB
+                        mem_percent = process.memory_percent()
+
+                        LOG.debug(f"💾 Memory: {mem_mb:.1f} MB ({mem_percent:.1f}%)")
+
+                        # Warn if memory usage is high
+                        if mem_percent > 80:
+                            LOG.warning(f"⚠️ High memory usage: {mem_mb:.1f} MB ({mem_percent:.1f}%)")
+                        elif mem_mb > 500:  # Warn if over 500MB
+                            LOG.warning(f"⚠️ Memory usage above 500MB: {mem_mb:.1f} MB")
+
+                        last_memory_check = current_time
+                    except Exception as e:
+                        LOG.debug(f"Failed to get memory info: {e}")
+
                 # Print status every 5 minutes
                 if current_time - last_status_time >= status_interval:
                     self._print_status()

@@ -692,43 +692,46 @@
                 if (interfaceResponse.ok) {
                     const interfaceData = await interfaceResponse.json();
                     lastFetchedInterfaceData = interfaceData;
-                    
+
                     // Update available interfaces from actual data
+                    // FIXED: Show ALL interfaces that have data in database, not just enabled ones in config
+                    // The configuration controls what gets collected, not what gets displayed
                     const newInterfaces = Object.keys(interfaceData);
-                    
-                    // Filter interfaces based on configuration if available
-                    let filteredInterfaces = newInterfaces;
-                    if (interfaceConfig && interfaceConfig.enabled_interfaces && interfaceConfig.enabled_interfaces.length > 0) {
-                        // Only show enabled interfaces if configuration specifies them
-                        filteredInterfaces = newInterfaces.filter(iface =>
-                            interfaceConfig.enabled_interfaces.includes(iface)
-                        );
-                        console.log(`Filtered to ${filteredInterfaces.length} enabled interfaces:`, filteredInterfaces);
-                    }
-                    
-                    if (JSON.stringify(availableInterfaces) !== JSON.stringify(filteredInterfaces)) {
-                        availableInterfaces = filteredInterfaces;
+
+                    // Sort interfaces for better display
+                    newInterfaces.sort();
+
+                    console.log(`Found ${newInterfaces.length} interfaces with data:`, newInterfaces);
+
+                    if (JSON.stringify(availableInterfaces) !== JSON.stringify(newInterfaces)) {
+                        availableInterfaces = newInterfaces;
                         updateInterfaceSelector();
                         
                         // Auto-select interfaces based on configuration or smart defaults
                         if (selectedInterfaces.length === 0 && availableInterfaces.length > 0) {
-                            if (interfaceConfig && interfaceConfig.enabled_interfaces) {
-                                // Select all enabled interfaces from config
+                            if (interfaceConfig && interfaceConfig.enabled_interfaces && interfaceConfig.enabled_interfaces.length > 0) {
+                                // Prefer enabled interfaces from config for auto-selection
                                 selectedInterfaces = interfaceConfig.enabled_interfaces.filter(iface =>
                                     availableInterfaces.includes(iface)
                                 );
-                            } else {
+                                console.log(`Auto-selected ${selectedInterfaces.length} enabled interfaces from config`);
+                            }
+
+                            // If no config or no enabled interfaces matched, use smart selection
+                            if (selectedInterfaces.length === 0) {
                                 // Smart selection: prioritize important interfaces
-                                const priorityInterfaces = ['ethernet1/1', 'ethernet1/2', 'ae1'];
+                                const priorityInterfaces = ['ethernet1/1', 'ethernet1/2', 'ae1', 'ae2'];
                                 const selectedPriority = availableInterfaces.filter(iface =>
-                                    priorityInterfaces.includes(iface)
+                                    priorityInterfaces.some(priority => iface.toLowerCase().includes(priority))
                                 );
-                                
+
                                 if (selectedPriority.length > 0) {
-                                    selectedInterfaces = selectedPriority;
+                                    selectedInterfaces = selectedPriority.slice(0, Math.min(5, selectedPriority.length));
+                                    console.log(`Auto-selected ${selectedInterfaces.length} priority interfaces`);
                                 } else {
-                                    // Fallback: select first few interfaces
-                                    selectedInterfaces = availableInterfaces.slice(0, Math.min(3, availableInterfaces.length));
+                                    // Fallback: select first few interfaces (up to 5)
+                                    selectedInterfaces = availableInterfaces.slice(0, Math.min(5, availableInterfaces.length));
+                                    console.log(`Auto-selected first ${selectedInterfaces.length} interfaces`);
                                 }
                             }
                             updateInterfaceSelector();

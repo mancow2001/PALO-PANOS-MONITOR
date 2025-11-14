@@ -6,6 +6,7 @@ Adds interface bandwidth and session statistics monitoring alongside existing fe
 import asyncio
 import logging
 import threading
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Any, Optional
@@ -22,25 +23,50 @@ except ImportError:
 
 LOG = logging.getLogger("panos_monitor.enhanced_web")
 
+class SimpleCache:
+    """Simple time-based cache for dashboard data"""
+    def __init__(self, ttl_seconds=30):
+        self.cache = {}
+        self.ttl = ttl_seconds
+
+    def get(self, key):
+        if key in self.cache:
+            value, timestamp = self.cache[key]
+            if time.time() - timestamp < self.ttl:
+                return value
+            else:
+                del self.cache[key]
+        return None
+
+    def set(self, key, value):
+        self.cache[key] = (value, time.time())
+
+    def clear(self):
+        self.cache.clear()
+
 class EnhancedWebDashboard:
     """Enhanced web dashboard with interface monitoring capabilities"""
     
     def __init__(self, database, config_manager, collector_manager=None):
         if not FASTAPI_OK:
             raise RuntimeError("FastAPI not available - install with: pip install fastapi uvicorn jinja2")
-        
+
         self.database = database
         self.config_manager = config_manager
         self.collector_manager = collector_manager
         self.app = FastAPI(title="Enhanced PAN-OS Multi-Firewall Monitor")
         self.server_thread = None
         self.should_stop = False
-        
+
+        # Add caching to reduce database load
+        self.cache = SimpleCache(ttl_seconds=30)  # Cache for 30 seconds
+        LOG.info("Dashboard cache initialized with 30s TTL")
+
         # Setup templates directory
         self.templates_dir = Path(__file__).parent / "templates"
         self.templates_dir.mkdir(exist_ok=True)
         self.templates = Jinja2Templates(directory=str(self.templates_dir))
-        
+
         self._verify_templates()
         self._setup_enhanced_routes()
     
@@ -75,6 +101,13 @@ class EnhancedWebDashboard:
         async def enhanced_dashboard(request: Request):
             """Enhanced main dashboard showing all firewalls with interface data"""
             try:
+                # Check cache first
+                cache_key = "dashboard_overview"
+                cached_data = self.cache.get(cache_key)
+                if cached_data is not None:
+                    LOG.debug("Serving dashboard from cache")
+                    return cached_data
+
                 # Get all firewalls from database
                 db_firewalls = self.database.get_all_firewalls()
                 
@@ -130,14 +163,14 @@ class EnhancedWebDashboard:
                             
                             total_rx = 0
                             total_tx = 0
-                            
-                            for interface_name in monitored_interfaces:
-                                interface_metrics = self.database.get_interface_metrics(name, interface_name, limit=1)
-                                if interface_metrics:
-                                    latest_interface = interface_metrics[0]
-                                    total_rx += latest_interface.get('rx_mbps', 0) or 0
-                                    total_tx += latest_interface.get('tx_mbps', 0) or 0
-                            
+
+                            # FIXED: Use batch query to get latest metrics for all interfaces in single query
+                            if monitored_interfaces:
+                                latest_interface_metrics = self.database.get_latest_interface_summary(name, monitored_interfaces)
+                                for interface_name, metrics in latest_interface_metrics.items():
+                                    total_rx += metrics.get('rx_mbps', 0) or 0
+                                    total_tx += metrics.get('tx_mbps', 0) or 0
+
                             if total_rx > 0 or total_tx > 0 or len(monitored_interfaces) > 0:
                                 interface_summary = {
                                     'total_rx': total_rx,
@@ -236,13 +269,19 @@ class EnhancedWebDashboard:
                     
                     uptime_hours = int((datetime.now(timezone.utc) - earliest).total_seconds() / 3600)
                 
-                return self.templates.TemplateResponse("dashboard.html", {
+                response = self.templates.TemplateResponse("dashboard.html", {
                     "request": request,
                     "firewalls": firewalls,
                     "database_stats": database_stats,
                     "uptime_hours": uptime_hours
                 })
-                
+
+                # Cache the response
+                self.cache.set(cache_key, response)
+                LOG.debug("Cached dashboard overview")
+
+                return response
+
             except Exception as e:
                 LOG.error(f"Enhanced dashboard error: {e}")
                 import traceback
@@ -287,7 +326,7 @@ class EnhancedWebDashboard:
             firewall_name: str,
             start_time: Optional[str] = Query(None),
             end_time: Optional[str] = Query(None),
-            limit: Optional[int] = Query(500),
+            limit: Optional[int] = Query(None),  # FIXED: Default None for "All", not 500
             user_timezone: Optional[str] = Query(None)
         ):
             """API endpoint to get metrics for a specific firewall (existing)"""
@@ -321,7 +360,7 @@ class EnhancedWebDashboard:
             firewall_name: str,
             start_time: Optional[str] = Query(None),
             end_time: Optional[str] = Query(None),
-            limit: Optional[int] = Query(500),
+            limit: Optional[int] = Query(None),  # FIXED: Default None for "All", not 500
             user_timezone: Optional[str] = Query(None)
         ):
             """NEW: API endpoint to get interface metrics for a specific firewall"""
@@ -348,17 +387,13 @@ class EnhancedWebDashboard:
                 
                 # Get all available interfaces for this firewall
                 available_interfaces = self.database.get_available_interfaces(firewall_name)
-                
-                # Get metrics for each interface
-                interface_data = {}
-                for interface_name in available_interfaces:
-                    metrics = self.database.get_interface_metrics(
-                        firewall_name, interface_name, start_dt, end_dt, limit
-                    )
-                    if metrics:
-                        interface_data[interface_name] = metrics
-                
-                LOG.info(f"Interface API - Found {len(interface_data)} interfaces for {firewall_name}")
+
+                # FIXED: Use batch query to get all interfaces in single query (fixes N+1 problem)
+                interface_data = self.database.get_interface_metrics_batch(
+                    firewall_name, available_interfaces, start_dt, end_dt, limit
+                )
+
+                LOG.info(f"Interface API - Found {len(interface_data)} interfaces for {firewall_name} in single batch query")
                 LOG.debug(f"Interface API - Available interfaces: {available_interfaces}")
                 return JSONResponse(interface_data)
                 
@@ -426,7 +461,7 @@ class EnhancedWebDashboard:
             firewall_name: str,
             start_time: Optional[str] = Query(None),
             end_time: Optional[str] = Query(None),
-            limit: Optional[int] = Query(500),
+            limit: Optional[int] = Query(None),  # FIXED: Default None for "All", not 500
             user_timezone: Optional[str] = Query(None)
         ):
             """NEW: API endpoint to get session statistics for a specific firewall"""
@@ -482,14 +517,92 @@ class EnhancedWebDashboard:
                     },
                     "enhanced_monitoring": True
                 }
-                
+
                 if self.collector_manager:
                     status["collectors"] = self.collector_manager.get_collector_status()
-                
+
                 return JSONResponse(status)
             except Exception as e:
                 LOG.error(f"API enhanced status error: {e}")
                 raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.get("/api/health")
+        async def get_health_check():
+            """Health check endpoint with memory, queue, and database metrics"""
+            try:
+                import psutil
+                import gc
+
+                # Get process info
+                process = psutil.Process()
+                mem_info = process.memory_info()
+                mem_mb = mem_info.rss / (1024 * 1024)
+                mem_percent = process.memory_percent()
+
+                # Get queue size if available
+                queue_size = 0
+                queue_full_warnings = 0
+                if self.collector_manager and hasattr(self.collector_manager, 'metrics_queue'):
+                    queue_size = self.collector_manager.metrics_queue.qsize()
+                    queue_full_warnings = getattr(self.collector_manager, 'queue_full_warnings', 0)
+
+                # Get database connection pool info
+                pool_size = 0
+                if hasattr(self.database, '_connection_pool'):
+                    pool_size = self.database._connection_pool.qsize()
+
+                # Get cache stats
+                cache_size = len(self.cache.cache) if hasattr(self, 'cache') else 0
+
+                # Determine health status
+                health_status = "healthy"
+                issues = []
+
+                if mem_percent > 80:
+                    health_status = "warning"
+                    issues.append(f"High memory usage: {mem_percent:.1f}%")
+
+                if queue_size > 800:  # 80% of max queue size (1000)
+                    health_status = "warning"
+                    issues.append(f"Queue nearly full: {queue_size}/1000")
+
+                if queue_full_warnings > 100:
+                    health_status = "critical"
+                    issues.append(f"Too many queue drops: {queue_full_warnings}")
+
+                health_data = {
+                    "status": health_status,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "memory": {
+                        "rss_mb": round(mem_mb, 1),
+                        "percent": round(mem_percent, 1),
+                    },
+                    "queue": {
+                        "size": queue_size,
+                        "max_size": 1000,
+                        "drops": queue_full_warnings
+                    },
+                    "database": {
+                        "connection_pool_size": pool_size
+                    },
+                    "cache": {
+                        "entries": cache_size
+                    },
+                    "issues": issues,
+                    "gc_stats": {
+                        "collections": gc.get_count()
+                    }
+                }
+
+                return JSONResponse(health_data)
+
+            except Exception as e:
+                LOG.error(f"Health check error: {e}")
+                return JSONResponse({
+                    "status": "error",
+                    "error": str(e),
+                    "timestamp": datetime.now(timezone.utc).isoformat()
+                }, status_code=500)
     
     def start_server(self, host: str = "0.0.0.0", port: int = 8080):
         """Start the enhanced web server in a thread"""

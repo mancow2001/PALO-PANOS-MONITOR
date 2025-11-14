@@ -11,6 +11,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Optional, Tuple, Any, Set
 from threading import Thread, Event, Lock
 from dataclasses import dataclass, field
+from collections import deque
 
 LOG = logging.getLogger("panos_monitor.interface_monitor_your_system")
 
@@ -435,11 +436,15 @@ class InterfaceMonitor:
             self.auto_discover = True
             self.exclude_patterns = ['mgmt', 'loopback', 'tunnel']
         
-        # Data storage with locks
-        self.interface_samples: Dict[str, List[InterfaceSample]] = {}
-        self.interface_metrics: Dict[str, List[InterfaceMetrics]] = {}
-        self.session_stats: List[SessionStats] = []
+        # Data storage with locks - using deque with maxlen for automatic memory management
+        # Reduced retention from 24h to 2h to prevent memory leaks
+        # At 30s intervals: 2 hours = 240 samples per interface
+        max_samples = 240
+        self.interface_samples: Dict[str, deque] = {}
+        self.interface_metrics: Dict[str, deque] = {}
+        self.session_stats: deque = deque(maxlen=max_samples)  # 2 hours of session stats
         self.data_lock = Lock()
+        self.max_samples = max_samples  # Store for interface-specific deques
         
         # Discovered interfaces (for auto-discovery)
         self.discovered_interfaces: Set[str] = set()
@@ -628,40 +633,27 @@ class InterfaceMonitor:
                     if not self._should_monitor_interface(interface_name):
                         continue
                     
-                    # Store sample
+                    # Store sample - deque automatically handles size limits
                     if interface_name not in self.interface_samples:
-                        self.interface_samples[interface_name] = []
+                        self.interface_samples[interface_name] = deque(maxlen=self.max_samples)
                     self.interface_samples[interface_name].append(sample)
-                    
+
                     # Calculate metrics if we have a previous sample
                     samples = self.interface_samples[interface_name]
                     if len(samples) >= 2:
                         prev_sample = samples[-2]
                         metrics = calculate_interface_metrics(prev_sample, sample)
-                        
+
                         if metrics:
                             if interface_name not in self.interface_metrics:
-                                self.interface_metrics[interface_name] = []
+                                self.interface_metrics[interface_name] = deque(maxlen=self.max_samples)
                             self.interface_metrics[interface_name].append(metrics)
-                            
+
                             LOG.debug(f"{self.name}: {interface_name} - "
                                     f"RX: {metrics.rx_mbps:.2f} Mbps, "
                                     f"TX: {metrics.tx_mbps:.2f} Mbps")
-                    
-                    # Keep only recent samples (last 24 hours)
-                    cutoff_time = datetime.now(timezone.utc) - timedelta(hours=24)
-                    self.interface_samples[interface_name] = [
-                        s for s in self.interface_samples[interface_name]
-                        if s.timestamp > cutoff_time
-                    ]
-                    
-                    if interface_name in self.interface_metrics:
-                        # Keep metrics for same time period
-                        self.interface_metrics[interface_name] = [
-                            m for m in self.interface_metrics[interface_name]
-                            if len([s for s in self.interface_samples[interface_name]
-                                   if s.timestamp >= cutoff_time]) > 0
-                        ]
+
+                    # No manual cleanup needed - deque handles it automatically with maxlen
             
             return True
             
@@ -693,13 +685,8 @@ class InterfaceMonitor:
             if session_stats and session_stats.success:
                 with self.data_lock:
                     self.session_stats.append(session_stats)
-                    
-                    # Keep only recent stats (last 24 hours)
-                    cutoff_time = datetime.now(timezone.utc) - timedelta(hours=24)
-                    self.session_stats = [
-                        s for s in self.session_stats if s.timestamp > cutoff_time
-                    ]
-                    
+                    # No manual cleanup needed - deque handles it automatically with maxlen
+
                     LOG.debug(f"{self.name}: Sessions - Active: {session_stats.active_sessions}, "
                              f"Max: {session_stats.max_sessions}")
                 return True
@@ -743,8 +730,8 @@ class InterfaceMonitor:
                          end_time: Optional[datetime] = None) -> List[SessionStats]:
         """Get session statistics for specified time range"""
         with self.data_lock:
-            stats = self.session_stats.copy()
-            
+            stats = list(self.session_stats)  # Convert deque to list
+
             if start_time or end_time:
                 filtered_stats = []
                 for stat in stats:
@@ -753,9 +740,9 @@ class InterfaceMonitor:
                     if end_time and stat.timestamp > end_time:
                         continue
                     filtered_stats.append(stat)
-                
+
                 return filtered_stats
-            
+
             return stats
     
     def get_available_interfaces(self) -> List[str]:

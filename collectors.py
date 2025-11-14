@@ -78,7 +78,7 @@ def create_default_interface_configs() -> List[InterfaceConfig]:
 
 class PanOSClient:
     """PAN-OS API client optimized for your specific PAN-OS 11 system"""
-    
+
     def __init__(self, host: str, verify_ssl: bool = True):
         self.base = host.rstrip("/")
         if not self.base.startswith("http"):
@@ -87,6 +87,19 @@ class PanOSClient:
         self.session.verify = verify_ssl
         self.api_key: Optional[str] = None
         self.last_error: Optional[str] = None
+
+    def close(self):
+        """Close the requests session to prevent connection leaks"""
+        if self.session:
+            try:
+                self.session.close()
+                LOG.debug(f"Closed requests session for {self.base}")
+            except Exception as e:
+                LOG.warning(f"Error closing session: {e}")
+
+    def __del__(self):
+        """Cleanup when object is destroyed"""
+        self.close()
 
     def keygen(self, username: str, password: str) -> bool:
         """Generate API key and return success status"""
@@ -887,6 +900,10 @@ class EnhancedFirewallCollector:
     def stop(self):
         """Stop the collector and all monitoring"""
         self.interface_monitor.stop_monitoring()
+        # Close the requests session to prevent connection leaks
+        if hasattr(self, 'client') and self.client:
+            self.client.close()
+            LOG.debug(f"{self.name}: Closed API client session")
 
 # Use the existing MultiFirewallCollector structure but with our updated collector
 class MultiFirewallCollector:
@@ -910,8 +927,11 @@ class MultiFirewallCollector:
         self.collectors: Dict[str, EnhancedFirewallCollector] = {}
         self.collection_threads: Dict[str, Thread] = {}
         self.stop_events: Dict[str, Event] = {}
-        self.metrics_queue = Queue()
+        # Set maximum queue size to prevent unbounded memory growth
+        # With 10 firewalls polling every 30s, this allows ~8 hours of backlog
+        self.metrics_queue = Queue(maxsize=1000)
         self.running = False
+        self.queue_full_warnings = 0  # Track queue overflow warnings
         
         # Initialize enhanced collectors only if we have firewall configs
         if firewall_configs:
@@ -993,8 +1013,17 @@ class MultiFirewallCollector:
             
             try:
                 result = collector.collect_metrics()
-                self.metrics_queue.put(result)
-                
+                # Use put with timeout to avoid blocking if queue is full
+                try:
+                    self.metrics_queue.put(result, timeout=5)
+                except Exception as queue_err:
+                    self.queue_full_warnings += 1
+                    if self.queue_full_warnings % 10 == 1:  # Log every 10th warning
+                        LOG.error(f"Metrics queue is full! Dropped metrics from {name}. "
+                                 f"Queue size: {self.metrics_queue.qsize()}, "
+                                 f"Total drops: {self.queue_full_warnings}")
+                    # Continue to next iteration - metrics are dropped but collection continues
+
                 if result.success:
                     LOG.debug(f"{name}: Metrics collected successfully")
                 else:
