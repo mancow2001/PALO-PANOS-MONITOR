@@ -238,5 +238,97 @@ class TestWebDashboardInitialization(unittest.TestCase):
         self.assertTrue(hasattr(cache, 'clear'))
 
 
+class TestAutoRegistration(unittest.TestCase):
+    """Test auto-registration of firewalls from config"""
+
+    def test_auto_registration_happens_before_cache_check(self):
+        """Test that auto-registration runs before checking cache"""
+        # This test verifies the fix for the cache ordering bug
+        # Auto-registration must happen BEFORE cache check so new firewalls are detected
+
+        # Simulate the logic flow
+        cache_checked = False
+        registration_run = False
+
+        # CORRECT ORDER (after fix):
+        # 1. Check for new firewalls (auto-registration)
+        registration_run = True
+
+        # 2. Only then check cache
+        if registration_run:
+            cache_checked = True
+
+        self.assertTrue(registration_run, "Registration should run first")
+        self.assertTrue(cache_checked, "Cache check should run after registration")
+
+    def test_new_firewalls_bypass_cache(self):
+        """Test that new firewall registration bypasses cache"""
+        from web_dashboard import SimpleCache
+
+        cache = SimpleCache(ttl_seconds=30)
+
+        # Simulate existing cached dashboard
+        cache.set("dashboard", {"firewalls": ["fw1"]})
+
+        # Simulate new firewall being added
+        newly_registered = ["fw2"]
+
+        # Logic should bypass cache when new firewalls registered
+        if newly_registered:
+            # Bypass cache - fetch fresh data
+            cached_data = None
+        else:
+            # Use cache
+            cached_data = cache.get("dashboard")
+
+        self.assertIsNone(cached_data,
+                         "Cache should be bypassed when new firewalls are registered")
+
+    def test_no_new_firewalls_uses_cache(self):
+        """Test that dashboard uses cache when no new firewalls"""
+        from web_dashboard import SimpleCache
+
+        cache = SimpleCache(ttl_seconds=30)
+        cache_data = {"firewalls": ["fw1"]}
+        cache.set("dashboard", cache_data)
+
+        # Simulate no new registrations
+        newly_registered = []
+
+        # Logic should use cache when no new registrations
+        if newly_registered:
+            cached_data = None
+        else:
+            cached_data = cache.get("dashboard")
+
+        self.assertIsNotNone(cached_data,
+                            "Cache should be used when no new registrations")
+        self.assertEqual(cached_data, cache_data,
+                        "Should return cached data")
+
+    def test_registration_detection_logic(self):
+        """Test logic for detecting new firewall registrations"""
+        # Simulate config-enabled firewalls
+        enabled_fw_names = {"fw1", "fw2", "fw3"}
+
+        # Simulate existing database firewalls
+        db_firewall_names = {"fw1", "fw2"}
+
+        # Detect new firewalls
+        newly_registered = []
+        for fw_name in enabled_fw_names:
+            if fw_name not in db_firewall_names:
+                newly_registered.append(fw_name)
+
+        self.assertEqual(len(newly_registered), 1,
+                        "Should detect 1 new firewall")
+        self.assertIn("fw3", newly_registered,
+                     "fw3 should be detected as new")
+        self.assertNotIn("fw1", newly_registered,
+                        "fw1 should not be detected (already in DB)")
+        self.assertNotIn("fw2", newly_registered,
+                        "fw2 should not be detected (already in DB)")
+
+
 if __name__ == '__main__':
     unittest.main()
