@@ -9,13 +9,22 @@ A comprehensive real-time monitoring solution for multiple Palo Alto Networks fi
 - **Persistent Data Storage**: SQLite database ensures data survives application restarts
 - **Per-Second Session Sampling**: Continuous background sampling of session info for accurate throughput and PPS capture
 - **Production-Ready Performance**: Enterprise-grade optimizations for long-running deployments
+- **Modern UI with Dark Mode** 🌙:
+  - Professional color palette (Primary Blue, Light Blue, Charcoal, Cool Grey)
+  - Dark mode toggle with localStorage persistence across pages
+  - Theme-aware chart rendering with proper contrast
+  - Smooth transitions and responsive design
+  - CSS architecture consolidation for easy maintenance
 - **Enhanced Web Dashboard**:
-  - Overview page listing all monitored firewalls
+  - Overview page listing all monitored firewalls with hardware info badges
   - Detailed firewall views with customizable date/time ranges
   - Real-time CPU aggregation toggles (Mean/Max/P95)
+  - **NEW:** CPU chart visibility controls (show/hide Management/Data Plane independently)
   - Enhanced throughput and PPS statistics (Mean/Max/Min/P95)
   - CSV download functionality for filtered data with comprehensive metrics
   - 30-second intelligent caching for reduced database load
+  - Firewall hardware detection (model, version, series)
+- **Critical Management CPU Fix**: Corrected CPU calculation for PA-3400/5400 series firewalls
 - **Intelligent Timezone Handling**: Automatic detection and conversion between local and UTC times
 - **Modular Architecture**: Clean separation across multiple Python modules for better maintainability
 - **Automatic Schema Migration**: Database automatically adds new columns for enhanced statistics
@@ -50,6 +59,13 @@ A comprehensive real-time monitoring solution for multiple Palo Alto Networks fi
 - **Comprehensive Testing**: 46 unit tests validate all critical functionality (100% pass rate)
 
 ### **Recent Bug Fixes** 🐛
+- **CRITICAL: Fixed Management CPU Calculation**: Corrected CPU calculation for firewalls with dedicated data plane cores
+  - PA-3400 series (PA-3410, PA-3420, PA-3430, PA-3440)
+  - PA-5400 series (PA-5410, PA-5420, PA-5430, PA-5440, PA-5445)
+  - PA-400, PA-1400 series also included in fix
+  - These models have DP cores pre-spun at 100% that contaminated management CPU readings
+  - Collector now detects model and skips problematic collection methods
+  - Management CPU values are now accurate for affected models
 - **Fixed Interface Display**: All interfaces with data now visible (not filtered by config)
 - **Fixed Per-Interface Limits**: Data point limits now apply per interface (e.g., 500 points per interface, not 500 total)
 - **Fixed "All" Data Points**: "All" option now returns all available data instead of defaulting to 500 points
@@ -60,7 +76,7 @@ panos-monitor/
 ├── main.py                      # Main application entry point
 ├── config.py                    # Configuration management
 ├── database.py                  # Data persistence with connection pooling & batch queries
-├── collectors.py                # Multi-threaded collection with bounded queues
+├── collectors.py                # Multi-threaded collection with hardware detection
 ├── web_dashboard.py             # Enhanced web interface with caching (FastAPI)
 ├── interface_monitor.py         # Interface monitoring with bounded deques
 ├── config.yaml                  # YAML configuration file
@@ -69,18 +85,21 @@ panos-monitor/
 ├── check_python_version.py      # Python 3.9+ compatibility checker
 ├── run_tests.sh                 # Test execution script
 ├── data/                        # Database storage
-│   └── metrics.db               # SQLite database (auto-created)
+│   └── metrics.db               # SQLite database (auto-created with hw info)
 ├── output/                      # Exports and logs
 │   ├── charts/                  # Generated visualizations
 │   └── raw_xml/                 # Debug XML files (optional)
-├── templates/                   # Web dashboard templates (auto-generated)
-│   ├── dashboard.html           # Main dashboard with caching
-│   └── firewall_detail.html     # Detailed metrics view (fixed interface display)
+├── static/                      # Static web assets
+│   └── css/
+│       └── styles.css           # Consolidated stylesheet with dark mode
+├── templates/                   # Web dashboard templates
+│   ├── dashboard.html           # Main dashboard with dark mode
+│   └── firewall_detail.html     # Detailed metrics view with CPU toggles
 ├── tests/                       # Comprehensive unit test suite (46 tests)
-│   ├── test_collectors.py       # Queue limits & cleanup tests (13 tests)
-│   ├── test_database.py         # Connection pooling & batch query tests (13 tests)
+│   ├── test_collectors.py       # Hardware detection & CPU tests (13 tests)
+│   ├── test_database.py         # Schema migration & hw info tests (13 tests)
 │   ├── test_memory_leaks.py     # Memory leak prevention tests (11 tests)
-│   └── test_web_dashboard.py    # Caching & health endpoint tests (11 tests)
+│   └── test_web_dashboard.py    # Caching & theme tests (11 tests)
 ```
 
 ## 🔧 Installation
@@ -408,38 +427,58 @@ The monitor continuously samples session info every second in background threads
 
 The system automatically creates and updates database schema:
 ```sql
+-- Firewalls table (auto-created, hardware info auto-migrated)
+CREATE TABLE firewalls (
+    name TEXT PRIMARY KEY,
+    host TEXT,
+    model TEXT,                        -- Auto-added via migration
+    family TEXT,                       -- Auto-added via migration
+    platform_family TEXT,              -- Auto-added via migration
+    serial TEXT,                       -- Auto-added via migration
+    hostname TEXT,                     -- Auto-added via migration
+    sw_version TEXT,                   -- Auto-added via migration
+    created_at TIMESTAMP,
+    updated_at TIMESTAMP
+);
+
 -- Enhanced metrics table (auto-created)
 CREATE TABLE metrics (
     firewall_name TEXT,
     timestamp TIMESTAMP,
-    
+
     -- CPU metrics
     mgmt_cpu REAL,
     data_plane_cpu_mean REAL,
     data_plane_cpu_max REAL,
     data_plane_cpu_p95 REAL,
-    
+
     -- Throughput metrics (enhanced)
     throughput_mbps_total REAL,
     throughput_mbps_max REAL,          -- Auto-added via migration
     throughput_mbps_min REAL,          -- Auto-added via migration
     throughput_mbps_p95 REAL,          -- Auto-added via migration
-    
+
     -- PPS metrics (enhanced)
     pps_total REAL,
     pps_max REAL,                      -- Auto-added via migration
     pps_min REAL,                      -- Auto-added via migration
     pps_p95 REAL,                      -- Auto-added via migration
-    
+
     -- Sampling quality metrics (auto-added)
     session_sample_count INTEGER,      -- Number of per-second samples
     session_success_rate REAL,         -- Success rate (0.0-1.0)
     session_sampling_period REAL,      -- Actual sampling period (seconds)
-    
+
     -- Other metrics
     pbuf_util_percent REAL
 );
 ```
+
+**Auto-Migration Features:**
+- Hardware info columns automatically added to existing firewalls table
+- Existing databases upgraded on first startup
+- No manual intervention required
+- Hardware info populated on next collection cycle
 
 ## 💾 Data Persistence
 
@@ -466,23 +505,53 @@ print(f"Avg samples per poll: {stats.get('avg_samples_per_poll', 'N/A')}")
 
 ## 🌐 Enhanced Web Dashboard
 
+### Modern UI Design 🎨
+- **Professional Color Palette**:
+  - Primary Blue (#005A9C) for headers and primary actions
+  - Light Blue (#1E8FE0) for interactive elements and hover states
+  - Charcoal (#333D47) for readable body text
+  - Cool Grey (#F4F6F8) for subtle backgrounds
+  - Clean white for maximum contrast
+- **Dark Mode Support** 🌙:
+  - Toggle button in top-right corner of every page
+  - Preference saved in browser localStorage
+  - Synchronized across dashboard and detail pages
+  - Theme-aware chart colors (grid lines, axis labels, text)
+  - High contrast in both light and dark modes
+  - Smooth 0.3s transitions between themes
+- **Hardware Information Display**:
+  - Firewall model badges (e.g., PA-3430, PA-5420)
+  - Software version display
+  - Series family identification
+  - Auto-detected and displayed on all pages
+
 ### Main Dashboard Features
-- **Firewall Grid**: Visual overview of all monitored firewalls
+- **Firewall Grid**: Visual overview of all monitored firewalls with hardware badges
 - **System Statistics**: Total metrics, firewall count, database size, uptime
 - **Status Indicators**: Live monitoring with animated status dots
 - **Quick Metrics**: Latest CPU, throughput, and buffer data for each firewall
+- **Model Detection**: Automatic hardware info display for each firewall
+- **Dark Mode**: Theme toggle synchronized across all pages
 - **Auto-Refresh**: Updates every 30 seconds by default
 
 ### Firewall Detail Features
 - **Interactive Charts**: CPU, throughput (with Mean/Max/Min/P95 toggle), packet buffer, and PPS
+- **CPU Chart Visibility Controls** ⭐ NEW:
+  - Toggle Management CPU on/off independently
+  - Toggle Data Plane CPU on/off independently
+  - "Both" button to show all metrics at once
+  - Safety feature prevents hiding all metrics
+  - Real-time chart updates when toggling
 - **Time Range Controls**: Custom start/end date and time selection with timezone conversion
 - **CPU Aggregation Toggle**: Switch between Mean/Max/P95 views instantly
 - **Throughput Statistics Toggle**: View Mean, Max, Min, or P95 or all at once
 - **PPS Statistics Toggle**: View Mean, Max, Min, or P95 or all at once
 - **Data Point Limits**: Choose 100-5000 points or all available data
 - **CSV Download**: Export filtered data with all statistics included
+- **Hardware Information**: Model, version, and series displayed in header
+- **Theme-Aware Charts**: Grid lines and labels adapt to light/dark mode
 - **Auto-refresh**: Configurable with manual override
-- **Responsive Design**: Works on desktop and mobile
+- **Responsive Design**: Works on desktop and mobile with adaptive controls
 
 ### API Endpoints
 - `GET /`: Main dashboard (cached for 30 seconds)
@@ -515,15 +584,35 @@ migrate_csv_to_database("old_panos_stats.csv", db, "legacy_firewall")
 
 ## 📈 Collected Metrics
 
+### Firewall Hardware Detection (Auto-Detected)
+- **Model**: Firewall model number (e.g., PA-3430, PA-5420)
+- **Software Version**: PAN-OS version running on firewall
+- **Family**: Firewall series (e.g., 3400, 5400)
+- **Platform Family**: Platform architecture details
+- **Serial Number**: Device serial number
+- **Hostname**: Configured firewall hostname
+
+**How it works:**
+- Hardware info detected on first authentication
+- Stored in database for persistent display
+- Displayed in dashboard and detail page headers
+- Used for model-aware CPU collection (see Management CPU fix)
+
 ### Management Plane
 - **CPU Components**: User, System, Idle percentages
 - **Total Management CPU**: Combined user + system percentage
+- **🔧 FIXED**: Accurate calculation for PA-3400/5400 series
+  - These models have dedicated data plane cores at 100%
+  - System automatically detects affected models (30+ models mapped)
+  - Skips contaminated collection methods for accurate readings
+  - Logs warnings when affected models detected
 
 ### Data Plane (Enhanced)
 - **CPU Mean**: Average across all cores (overall health)
 - **CPU Max**: Highest loaded core (bottleneck detection)
 - **CPU P95**: 95th percentile (capacity planning)
 - **Dynamic Detection**: Auto-discovers all processors and cores
+- **Model-Aware Collection**: Uses appropriate methods based on detected hardware
 
 ### Network Performance (Enhanced with Per-Second Sampling)
 - **Throughput Mean**: Average Mbps over polling interval
@@ -832,8 +921,13 @@ For detailed testing information, see [TESTING.md](TESTING.md).
 - **Unbounded memory growth** → Bounded deques and queues with automatic cleanup
 
 ### **New Core Features**
+- **Modern UI with Dark Mode**: Professional design with light/dark theme toggle
+- **Hardware Detection**: Automatic firewall model, version, and series identification
+- **Management CPU Fix**: Corrected calculations for PA-3400/5400 series firewalls
+- **CPU Chart Controls**: Show/hide Management and Data Plane CPU independently
+- **CSS Architecture**: Consolidated stylesheet for easy maintenance and theming
 - **Per-Second Session Sampling**: Background threads continuously sample session info
-- **Automatic Schema Migration**: Database schema updates automatically
+- **Automatic Schema Migration**: Database schema updates automatically (including hardware info)
 - **Enhanced Statistics**: Throughput and PPS now include Mean/Max/Min/P95
 - **Sampling Quality Metrics**: Track sample count, success rate, and sampling period
 - **Web-Based Dashboard**: Modern, responsive interface with filtering and export
@@ -844,7 +938,7 @@ For detailed testing information, see [TESTING.md](TESTING.md).
 - **Connection Pooling**: Database connection reuse reduces overhead by 90%+
 - **Intelligent Caching**: 30-second TTL cache for dashboard data
 - **Health Monitoring**: `/api/health` endpoint for system status
-- **Comprehensive Testing**: 45 unit tests validate all functionality
+- **Comprehensive Testing**: 46 unit tests validate all functionality
 
 ### **New Requirements**
 - **Python 3.9+**: Minimum required version (tested through Python 3.14)
@@ -908,6 +1002,9 @@ python main.py
 # Health: http://localhost:8080/api/health
 
 # 9. Use enhanced features
+# - Toggle dark mode with button in top-right corner (preference saved)
+# - View firewall hardware info (model, version, series) on all pages
+# - Show/hide CPU metrics independently (Management/Data Plane)
 # - Per-second sampling automatically captures throughput bursts
 # - Toggle CPU aggregation methods in web interface
 # - Set custom date/time ranges with timezone conversion
