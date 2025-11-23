@@ -1,4 +1,7 @@
 .DS_Store
 .env
 config.py
+/__pycache__
+/tests/__pycache__
+/.claude
 claude.md

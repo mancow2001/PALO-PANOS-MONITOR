@@ -8,10 +8,12 @@ import sqlite3
 import logging
 import json
 import re
+import threading
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Tuple
 from contextlib import contextmanager
+from queue import Queue, Empty
 
 LOG = logging.getLogger("panos_monitor.database")
 
@@ -92,13 +94,20 @@ parse_iso_datetime = parse_iso_datetime_python36
 
 class EnhancedMetricsDatabase:
     """SQLite database for storing firewall metrics, interface data, and session statistics"""
-    
+
     def __init__(self, db_path: str):
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Connection pooling to reduce overhead from creating/destroying connections
+        # SQLite doesn't have true pooling, but we can reuse connections per thread
+        self._connection_pool = Queue(maxsize=10)  # Pool of 10 reusable connections
+        self._pool_lock = threading.Lock()
+        self._thread_local = threading.local()
+
         LOG.info(f"🔧 Initializing database at: {self.db_path}")
         self._init_database()
-        LOG.info(f"✅ Database ready at: {self.db_path}")
+        LOG.info(f"✅ Database ready with connection pooling at: {self.db_path}")
     
     def _init_database(self):
         """Initialize database schema with automatic migration"""
@@ -308,13 +317,22 @@ class EnhancedMetricsDatabase:
             
             # Create indexes for interface metrics
             conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_interface_metrics_firewall_interface_timestamp 
+                CREATE INDEX IF NOT EXISTS idx_interface_metrics_firewall_interface_timestamp
                 ON interface_metrics (firewall_name, interface_name, timestamp)
             """)
-            
+
+            # Additional optimized indexes for common query patterns
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_interface_metrics_firewall_timestamp
+                ON interface_metrics (firewall_name, timestamp DESC)
+            """)
+
+            # Note: Partial indexes with datetime() are not supported in all SQLite versions
+            # Removed partial indexes to ensure compatibility
+
             # Create indexes for session statistics
             conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_session_statistics_firewall_timestamp 
+                CREATE INDEX IF NOT EXISTS idx_session_statistics_firewall_timestamp
                 ON session_statistics (firewall_name, timestamp)
             """)
             
@@ -332,13 +350,55 @@ class EnhancedMetricsDatabase:
     
     @contextmanager
     def _get_connection(self):
-        """Context manager for database connections"""
-        conn = sqlite3.connect(str(self.db_path), timeout=30.0)
-        conn.row_factory = sqlite3.Row  # Enable column access by name
+        """
+        Context manager for database connections with pooling
+        Reuses connections from pool to reduce overhead
+        """
+        conn = None
+        from_pool = False
+
         try:
+            # Try to get connection from pool (non-blocking)
+            try:
+                conn = self._connection_pool.get_nowait()
+                from_pool = True
+                LOG.debug(f"Reusing connection from pool (pool size: {self._connection_pool.qsize()})")
+            except Empty:
+                # Pool is empty, create new connection
+                conn = sqlite3.connect(str(self.db_path), timeout=30.0, check_same_thread=False)
+                conn.row_factory = sqlite3.Row
+                LOG.debug("Created new database connection")
+
             yield conn
+
         finally:
-            conn.close()
+            if conn:
+                try:
+                    # Return connection to pool if possible (and it's healthy)
+                    if from_pool or self._connection_pool.qsize() < 10:
+                        # Reset any uncommitted transactions
+                        try:
+                            conn.rollback()
+                        except:
+                            pass
+                        # Try to return to pool
+                        try:
+                            self._connection_pool.put_nowait(conn)
+                            LOG.debug(f"Returned connection to pool (pool size: {self._connection_pool.qsize()})")
+                        except:
+                            # Pool is full, close this connection
+                            conn.close()
+                            LOG.debug("Pool full, closed excess connection")
+                    else:
+                        # Pool is full, close connection
+                        conn.close()
+                        LOG.debug("Closed database connection (pool full)")
+                except Exception as e:
+                    LOG.debug(f"Error managing connection: {e}")
+                    try:
+                        conn.close()
+                    except:
+                        pass
     
     def register_firewall(self, name: str, host: str) -> bool:
         """Register a firewall in the database"""
@@ -513,7 +573,69 @@ class EnhancedMetricsDatabase:
         except Exception as e:
             LOG.error(f"Failed to get interface metrics for {firewall_name}: {e}")
             return []
-    
+
+    def get_interface_metrics_batch(self, firewall_name: str, interface_names: List[str],
+                                   start_time: Optional[datetime] = None,
+                                   end_time: Optional[datetime] = None,
+                                   limit: Optional[int] = None) -> Dict[str, List[Dict[str, Any]]]:
+        """
+        Get interface metrics for multiple interfaces in a single query (fixes N+1 problem)
+        Returns dict mapping interface_name to list of metrics
+        """
+        if not interface_names:
+            return {}
+
+        try:
+            with self._get_connection() as conn:
+                # Build query with IN clause for multiple interfaces
+                placeholders = ','.join('?' * len(interface_names))
+                query = f"""
+                    SELECT * FROM interface_metrics
+                    WHERE firewall_name = ?
+                    AND interface_name IN ({placeholders})
+                """
+                params = [firewall_name] + list(interface_names)
+
+                if start_time:
+                    query += " AND timestamp >= ?"
+                    params.append(start_time)
+
+                if end_time:
+                    query += " AND timestamp <= ?"
+                    params.append(end_time)
+
+                # FIXED: Apply limit PER interface, not globally
+                # Strategy: Fetch all matching rows, then limit per interface in Python
+                # This ensures each interface gets up to 'limit' data points
+
+                query += " ORDER BY interface_name, timestamp DESC"
+
+                cursor = conn.execute(query, params)
+                rows = cursor.fetchall()
+
+                # Group results by interface_name and apply per-interface limit
+                result = {}
+                for row in rows:
+                    row_dict = dict(row)
+                    iface = row_dict['interface_name']
+                    if iface not in result:
+                        result[iface] = []
+
+                    # Apply limit PER interface (e.g., 500 points per interface, not 500 total)
+                    if limit is None or len(result[iface]) < limit:
+                        result[iface].append(row_dict)
+
+                LOG.info(f"Batch query fetched data for {len(result)} interfaces (up to {limit or 'all'} points per interface)")
+                if limit:
+                    total_points = sum(len(points) for points in result.values())
+                    LOG.debug(f"Returned {total_points} total data points across {len(result)} interfaces")
+
+                return result
+
+        except Exception as e:
+            LOG.error(f"Failed to get interface metrics batch for {firewall_name}: {e}")
+            return {}
+
     def get_session_statistics(self, firewall_name: str,
                              start_time: Optional[datetime] = None,
                              end_time: Optional[datetime] = None,
@@ -554,16 +676,58 @@ class EnhancedMetricsDatabase:
         try:
             with self._get_connection() as conn:
                 cursor = conn.execute("""
-                    SELECT DISTINCT interface_name 
-                    FROM interface_metrics 
+                    SELECT DISTINCT interface_name
+                    FROM interface_metrics
                     WHERE firewall_name = ?
                     ORDER BY interface_name
                 """, (firewall_name,))
-                
+
                 return [row[0] for row in cursor.fetchall()]
         except Exception as e:
             LOG.error(f"Failed to get available interfaces for {firewall_name}: {e}")
             return []
+
+    def get_latest_interface_summary(self, firewall_name: str, interface_names: List[str]) -> Dict[str, Dict[str, Any]]:
+        """
+        Get latest metrics for multiple interfaces in a single query (fixes N+1 problem for dashboard)
+        Returns dict mapping interface_name to latest metrics
+        """
+        if not interface_names:
+            return {}
+
+        try:
+            with self._get_connection() as conn:
+                # Build query with IN clause and get latest record per interface
+                placeholders = ','.join('?' * len(interface_names))
+                query = f"""
+                    SELECT im.*
+                    FROM interface_metrics im
+                    INNER JOIN (
+                        SELECT interface_name, MAX(timestamp) as max_timestamp
+                        FROM interface_metrics
+                        WHERE firewall_name = ? AND interface_name IN ({placeholders})
+                        GROUP BY interface_name
+                    ) latest ON im.interface_name = latest.interface_name
+                              AND im.timestamp = latest.max_timestamp
+                    WHERE im.firewall_name = ?
+                """
+                params = [firewall_name] + list(interface_names) + [firewall_name]
+
+                cursor = conn.execute(query, params)
+                rows = cursor.fetchall()
+
+                # Map interface_name to metrics
+                result = {}
+                for row in rows:
+                    row_dict = dict(row)
+                    result[row_dict['interface_name']] = row_dict
+
+                LOG.debug(f"Fetched latest metrics for {len(result)} interfaces in single query")
+                return result
+
+        except Exception as e:
+            LOG.error(f"Failed to get latest interface summary for {firewall_name}: {e}")
+            return {}
     
     # Include all original methods from the base database class
     def get_metrics(self, firewall_name: str, start_time: Optional[datetime] = None,
