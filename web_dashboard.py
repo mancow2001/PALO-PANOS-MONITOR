@@ -62,6 +62,14 @@ class EnhancedWebDashboard:
         self.cache = SimpleCache(ttl_seconds=30)  # Cache for 30 seconds
         LOG.info("Dashboard cache initialized with 30s TTL")
 
+        # Setup static files directory
+        self.static_dir = Path(__file__).parent / "static"
+        if self.static_dir.exists():
+            self.app.mount("/static", StaticFiles(directory=str(self.static_dir)), name="static")
+            LOG.info(f"Static files directory mounted: {self.static_dir}")
+        else:
+            LOG.warning(f"Static files directory not found: {self.static_dir}")
+
         # Setup templates directory
         self.templates_dir = Path(__file__).parent / "templates"
         self.templates_dir.mkdir(exist_ok=True)
@@ -101,32 +109,39 @@ class EnhancedWebDashboard:
         async def enhanced_dashboard(request: Request):
             """Enhanced main dashboard showing all firewalls with interface data"""
             try:
-                # Check cache first
-                cache_key = "dashboard_overview"
-                cached_data = self.cache.get(cache_key)
-                if cached_data is not None:
-                    LOG.debug("Serving dashboard from cache")
-                    return cached_data
-
-                # Get all firewalls from database
+                # AUTO-SYNC: Always sync enabled firewalls from config to database
+                # This ensures new firewalls are registered and existing ones are updated
+                # IMPORTANT: This must run BEFORE cache check to catch new firewalls
+                enabled_fw_names = self.config_manager.get_enabled_firewalls()
                 db_firewalls = self.database.get_all_firewalls()
-                
-                # FALLBACK: If database is empty, register firewalls from config
-                if not db_firewalls:
-                    LOG.info("No firewalls in database, registering from configuration...")
-                    enabled_fw_names = self.config_manager.get_enabled_firewalls()
-                    
-                    for fw_name in enabled_fw_names:
+                db_firewall_names = {fw['name'] for fw in db_firewalls}
+
+                # Register any firewalls from config that aren't in database yet
+                newly_registered = []
+                for fw_name in enabled_fw_names:
+                    if fw_name not in db_firewall_names:
                         # Get the actual firewall config object
                         fw_config = self.config_manager.get_firewall(fw_name)
                         if fw_config:
                             self.database.register_firewall(fw_config.name, fw_config.host)
-                            LOG.info(f"Auto-registered firewall: {fw_config.name} at {fw_config.host}")
+                            LOG.info(f"Auto-registered new firewall: {fw_config.name} at {fw_config.host}")
+                            newly_registered.append(fw_name)
                         else:
                             LOG.warning(f"Could not get config for firewall: {fw_name}")
-                    
-                    # Fetch again after registration
+
+                # Refresh database list if we registered any new firewalls
+                if newly_registered:
+                    LOG.info(f"Registered {len(newly_registered)} new firewall(s): {', '.join(newly_registered)}")
                     db_firewalls = self.database.get_all_firewalls()
+                    # Don't use cache if we just registered new firewalls
+                    LOG.debug(f"Bypassing cache - just registered {len(newly_registered)} new firewall(s)")
+                else:
+                    # Check cache only if no new registrations
+                    cache_key = "dashboard_overview"
+                    cached_data = self.cache.get(cache_key)
+                    if cached_data is not None:
+                        LOG.debug("Serving dashboard from cache (no new firewalls detected)")
+                        return cached_data
                 
                 # Get enhanced database stats
                 database_stats = self.database.get_database_stats()
@@ -244,6 +259,9 @@ class EnhancedWebDashboard:
                     firewalls.append({
                         'name': name,
                         'host': fw_data['host'],
+                        'model': fw_data.get('model', ''),
+                        'family': fw_data.get('family', ''),
+                        'sw_version': fw_data.get('sw_version', ''),
                         'status_class': status_class,
                         'latest_metrics': latest_metrics,
                         'interface_summary': interface_summary,
@@ -357,10 +375,17 @@ class EnhancedWebDashboard:
 
                 LOG.info(f"Successfully loading detail page for firewall: '{firewall_name}' at {firewall_config.host}")
 
+                # Get firewall hardware info from database
+                db_firewalls = self.database.get_all_firewalls()
+                firewall_hw_info = next((fw for fw in db_firewalls if fw['name'] == firewall_name), {})
+
                 return self.templates.TemplateResponse("firewall_detail.html", {
                     "request": request,
                     "firewall_name": firewall_name,
                     "firewall_host": firewall_config.host,
+                    "firewall_model": firewall_hw_info.get('model', ''),
+                    "firewall_family": firewall_hw_info.get('family', ''),
+                    "firewall_sw_version": firewall_hw_info.get('sw_version', ''),
                     "default_start_date": start_date,
                     "default_end_date": end_date,
                     "default_start_time": default_start_time,

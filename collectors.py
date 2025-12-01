@@ -31,6 +31,66 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 LOG = logging.getLogger("panos_monitor.updated_collectors")
 
+# Firewall models with dedicated data plane cores that affect management CPU calculation
+# These models have cores pre-spun at 100% for data plane, which contaminates mgmt CPU
+# when using system resources/top parsing method
+FIREWALL_CORE_ARCHITECTURE = {
+    # PA-400 Series
+    "PA-410": {"total_cores": 4, "mgmt_cores": 1, "dp_cores": 3},
+    "PA-415": {"total_cores": 4, "mgmt_cores": 1, "dp_cores": 3},
+    "PA-415-5G": {"total_cores": 4, "mgmt_cores": 1, "dp_cores": 3},
+    "PA-440": {"total_cores": 4, "mgmt_cores": 1, "dp_cores": 3},
+    "PA-445": {"total_cores": 4, "mgmt_cores": 1, "dp_cores": 3},
+    "PA-450": {"total_cores": 6, "mgmt_cores": 2, "dp_cores": 4},
+    "PA-450R": {"total_cores": 6, "mgmt_cores": 2, "dp_cores": 4},
+    "PA-455": {"total_cores": 9, "mgmt_cores": 2, "dp_cores": 7},
+    "PA-460": {"total_cores": 8, "mgmt_cores": 2, "dp_cores": 6},
+
+    # PA-1400 Series
+    "PA-1410": {"total_cores": 8, "mgmt_cores": 2, "dp_cores": 6},
+    "PA-1420": {"total_cores": 12, "mgmt_cores": 3, "dp_cores": 9},
+
+    # PA-3400 Series
+    "PA-3410": {"total_cores": 12, "mgmt_cores": 3, "dp_cores": 9},
+    "PA-3420": {"total_cores": 16, "mgmt_cores": 3, "dp_cores": 13},
+    "PA-3430": {"total_cores": 20, "mgmt_cores": 4, "dp_cores": 16},
+    "PA-3440": {"total_cores": 24, "mgmt_cores": 5, "dp_cores": 19},
+
+    # PA-5400 Series
+    "PA-5410": {"total_cores": 24, "mgmt_cores": 5, "dp_cores": 19},
+    "PA-5420": {"total_cores": 32, "mgmt_cores": 6, "dp_cores": 26},
+    "PA-5430": {"total_cores": 48, "mgmt_cores": 10, "dp_cores": 38},
+    "PA-5440": {"total_cores": 64, "mgmt_cores": 12, "dp_cores": 52},
+    "PA-5445": {"total_cores": 64, "mgmt_cores": 12, "dp_cores": 52},
+}
+
+def is_affected_by_dp_core_issue(model: str) -> bool:
+    """
+    Check if firewall model is affected by data plane core contamination issue.
+
+    Affected models have dedicated data plane cores running at 100% that skew
+    management CPU calculations when using top/system resources parsing.
+
+    Args:
+        model: Firewall model string (e.g., "PA-3430")
+
+    Returns:
+        True if model is in the affected list
+    """
+    return model in FIREWALL_CORE_ARCHITECTURE
+
+def get_core_architecture(model: str) -> Optional[Dict[str, int]]:
+    """
+    Get core architecture details for a firewall model.
+
+    Args:
+        model: Firewall model string (e.g., "PA-3430")
+
+    Returns:
+        Dict with total_cores, mgmt_cores, dp_cores, or None if not in mapping
+    """
+    return FIREWALL_CORE_ARCHITECTURE.get(model)
+
 @dataclass
 class CollectionResult:
     """Result of a metrics collection attempt"""
@@ -505,6 +565,35 @@ def parse_cpu_from_system_info(xml_text: str) -> Tuple[Dict[str, float], str]:
     except Exception as e:
         return {}, f"cpu parse error from system info: {e}"
 
+def parse_system_info_hardware(xml_text: str) -> Dict[str, str]:
+    """
+    Extract firewall hardware/model information from system info XML.
+    Uses: <show><system><info/></system></show>
+
+    Returns dict with: model, family, platform_family, serial, hostname, sw_version
+    """
+    hardware_info: Dict[str, str] = {}
+    try:
+        root = ET.fromstring(xml_text)
+
+        # Extract all available hardware fields
+        hardware_info['model'] = root.findtext(".//system/model") or ""
+        hardware_info['family'] = root.findtext(".//system/family") or ""
+        hardware_info['platform_family'] = root.findtext(".//system/platform-family") or ""
+        hardware_info['serial'] = root.findtext(".//system/serial") or ""
+        hardware_info['hostname'] = root.findtext(".//system/hostname") or ""
+        hardware_info['sw_version'] = root.findtext(".//system/sw-version") or ""
+
+        # Log successful detection
+        if hardware_info.get('model'):
+            LOG.info(f"Detected firewall model: {hardware_info['model']} "
+                    f"(family: {hardware_info.get('family', 'unknown')})")
+
+        return hardware_info
+    except Exception as e:
+        LOG.error(f"Error parsing hardware info from system info: {e}")
+        return {}
+
 def parse_cpu_from_top(xml_text: str) -> Tuple[Dict[str, float], str]:
     """
     Parse management CPU from top CDATA (fallback method)
@@ -673,7 +762,12 @@ class EnhancedFirewallCollector:
         self.authenticated = False
         self.last_poll_time = None
         self.poll_count = 0
-        
+
+        # Hardware/model information (detected during authentication)
+        self.hardware_info: Dict[str, str] = {}
+        self.model: str = ""
+        self.is_affected_model: bool = False
+
         # Interface monitoring
         interface_configs = getattr(config, 'interface_configs', None)
         if not interface_configs:
@@ -688,14 +782,43 @@ class EnhancedFirewallCollector:
         success = self.client.keygen(self.config.username, self.config.password)
         if success:
             self.authenticated = True
-            
+
+            # Detect firewall model and hardware info
+            self._detect_hardware_info()
+
             # Start interface monitoring
             self.interface_monitor.start_monitoring()
-            
+
             LOG.info(f"Successfully authenticated with {self.name} and started monitoring")
         else:
             LOG.error(f"Failed to authenticate with {self.name}: {self.client.last_error}")
         return success
+
+    def _detect_hardware_info(self):
+        """Detect firewall hardware/model information after authentication"""
+        try:
+            LOG.info(f"{self.name}: Detecting firewall model and hardware info...")
+            xml = self.client.op("<show><system><info/></system></show>")
+            if xml and 'status="success"' in xml:
+                self.hardware_info = parse_system_info_hardware(xml)
+                self.model = self.hardware_info.get('model', '')
+
+                # Check if this model is affected by DP core issue
+                if self.model:
+                    self.is_affected_model = is_affected_by_dp_core_issue(self.model)
+                    if self.is_affected_model:
+                        arch = get_core_architecture(self.model)
+                        LOG.warning(
+                            f"{self.name}: Model {self.model} is affected by data plane core "
+                            f"contamination issue (architecture: {arch}). Management CPU "
+                            f"calculation will use adjusted methods."
+                        )
+                    else:
+                        LOG.info(f"{self.name}: Model {self.model} is not in affected models list")
+            else:
+                LOG.warning(f"{self.name}: Could not detect hardware info: {self.client.last_error}")
+        except Exception as e:
+            LOG.error(f"{self.name}: Error detecting hardware info: {e}")
     
     def _save_raw_xml(self, name: str, content: str):
         """Save raw XML response for debugging"""
@@ -762,6 +885,16 @@ class EnhancedFirewallCollector:
             LOG.debug(f"{self.name}: Method 2 exception: {e}")
         
         # Method 3: System resources (top) - fallback
+        # Skip for affected models (data plane cores contaminate management CPU)
+        if self.is_affected_model:
+            LOG.warning(
+                f"{self.name}: Skipping Method 3 (system resources/top) for {self.model} - "
+                f"this model has dedicated data plane cores at 100% that contaminate mgmt CPU. "
+                f"Methods 1 & 2 should provide accurate values."
+            )
+            LOG.error(f"{self.name}: ❌ All CPU collection methods failed - no data available")
+            return {}
+
         try:
             LOG.info(f"{self.name}: Attempting Method 3 - System resources (top)")
             xml = self.client.op("<show><system><resources/></system></show>")
@@ -1005,9 +1138,10 @@ class MultiFirewallCollector:
         """Worker thread for collecting metrics from a single firewall"""
         config = self.firewall_configs[name]
         interval = config.poll_interval
-        
+        hardware_registered = False  # Track if we've registered hardware info
+
         LOG.info(f"Started collection worker for {name} (interval: {interval}s)")
-        
+
         while not stop_event.is_set():
             start_time = time.time()
             
@@ -1026,6 +1160,15 @@ class MultiFirewallCollector:
 
                 if result.success:
                     LOG.debug(f"{name}: Metrics collected successfully")
+
+                    # Register hardware info after first successful authentication
+                    if not hardware_registered and collector.hardware_info and self.database:
+                        try:
+                            self.database.register_firewall(name, config.host, collector.hardware_info)
+                            hardware_registered = True
+                            LOG.info(f"{name}: Registered hardware info in database")
+                        except Exception as e:
+                            LOG.warning(f"{name}: Could not register hardware info: {e}")
                 else:
                     LOG.warning(f"{name}: Collection failed - {result.error}")
                     

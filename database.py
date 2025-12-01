@@ -279,7 +279,30 @@ class EnhancedMetricsDatabase:
                     LOG.warning("   Obsolete columns will remain but won't receive new data")
             else:
                 LOG.debug("✅ Schema is up-to-date: No obsolete columns found")
-            
+
+            # Migrate firewalls table to add hardware info columns
+            cursor = conn.execute("PRAGMA table_info(firewalls)")
+            firewall_columns = [row[1] for row in cursor.fetchall()]
+
+            hardware_columns = {
+                'model': 'TEXT',
+                'family': 'TEXT',
+                'platform_family': 'TEXT',
+                'serial': 'TEXT',
+                'hostname': 'TEXT',
+                'sw_version': 'TEXT'
+            }
+
+            for col_name, col_type in hardware_columns.items():
+                if col_name not in firewall_columns:
+                    try:
+                        conn.execute(f"ALTER TABLE firewalls ADD COLUMN {col_name} {col_type}")
+                        LOG.info(f"✅ Added {col_name} column to firewalls table")
+                    except Exception as e:
+                        LOG.warning(f"Could not add {col_name} column: {e}")
+
+            conn.commit()
+
             # Create interface metrics table
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS interface_metrics (
@@ -400,16 +423,43 @@ class EnhancedMetricsDatabase:
                     except:
                         pass
     
-    def register_firewall(self, name: str, host: str) -> bool:
-        """Register a firewall in the database"""
+    def register_firewall(self, name: str, host: str, hardware_info: Optional[Dict[str, str]] = None) -> bool:
+        """
+        Register a firewall in the database with optional hardware information
+
+        Args:
+            name: Firewall name
+            host: Firewall host/IP
+            hardware_info: Optional dict with model, family, serial, etc.
+        """
         try:
             with self._get_connection() as conn:
-                conn.execute("""
-                    INSERT OR REPLACE INTO firewalls (name, host, updated_at)
-                    VALUES (?, ?, CURRENT_TIMESTAMP)
-                """, (name, host))
+                if hardware_info:
+                    # Store hardware info if provided
+                    conn.execute("""
+                        INSERT OR REPLACE INTO firewalls
+                        (name, host, model, family, platform_family, serial, hostname, sw_version, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    """, (
+                        name,
+                        host,
+                        hardware_info.get('model'),
+                        hardware_info.get('family'),
+                        hardware_info.get('platform_family'),
+                        hardware_info.get('serial'),
+                        hardware_info.get('hostname'),
+                        hardware_info.get('sw_version')
+                    ))
+                    model_info = f" [Model: {hardware_info.get('model', 'unknown')}]" if hardware_info.get('model') else ""
+                    LOG.info(f"Registered firewall: {name} ({host}){model_info}")
+                else:
+                    # Just update name and host
+                    conn.execute("""
+                        INSERT OR REPLACE INTO firewalls (name, host, updated_at)
+                        VALUES (?, ?, CURRENT_TIMESTAMP)
+                    """, (name, host))
+                    LOG.info(f"Registered firewall: {name} ({host})")
                 conn.commit()
-                LOG.info(f"Registered firewall: {name} ({host})")
                 return True
         except Exception as e:
             LOG.error(f"Failed to register firewall {name}: {e}")
@@ -768,16 +818,20 @@ class EnhancedMetricsDatabase:
         return self.get_metrics(firewall_name, limit=count)
     
     def get_all_firewalls(self) -> List[Dict[str, Any]]:
-        """Get list of all registered firewalls"""
+        """Get list of all registered firewalls with hardware info"""
         try:
             with self._get_connection() as conn:
                 cursor = conn.execute("""
                     SELECT f.name, f.host, f.created_at, f.updated_at,
+                           f.model, f.family, f.platform_family, f.serial,
+                           f.hostname, f.sw_version,
                            COUNT(m.id) as metric_count,
                            MAX(m.timestamp) as last_metric_time
                     FROM firewalls f
                     LEFT JOIN metrics m ON f.name = m.firewall_name
-                    GROUP BY f.name, f.host, f.created_at, f.updated_at
+                    GROUP BY f.name, f.host, f.created_at, f.updated_at,
+                             f.model, f.family, f.platform_family, f.serial,
+                             f.hostname, f.sw_version
                     ORDER BY f.name
                 """)
                 return [dict(row) for row in cursor.fetchall()]

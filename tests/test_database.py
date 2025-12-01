@@ -236,5 +236,164 @@ class TestDatabaseIndexes(unittest.TestCase):
         self.assertGreater(len(indexes), 0, "Should have performance indexes created")
 
 
+class TestFirewallHardwareInfo(unittest.TestCase):
+    """Test firewall hardware information storage and retrieval"""
+
+    def setUp(self):
+        """Create temporary database for testing"""
+        self.temp_dir = tempfile.mkdtemp()
+        self.db_path = Path(self.temp_dir) / "test_metrics.db"
+        self.db = EnhancedMetricsDatabase(str(self.db_path))
+
+    def tearDown(self):
+        """Clean up temporary database"""
+        import shutil
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_schema_has_hardware_columns(self):
+        """Test that firewalls table has hardware info columns"""
+        with self.db._get_connection() as conn:
+            cursor = conn.execute("PRAGMA table_info(firewalls)")
+            columns = [row[1] for row in cursor.fetchall()]
+
+        expected_columns = ['model', 'family', 'platform_family', 'serial',
+                          'hostname', 'sw_version']
+
+        for col in expected_columns:
+            self.assertIn(col, columns,
+                         f"Column {col} should exist in firewalls table")
+
+    def test_register_firewall_with_hardware_info(self):
+        """Test registering firewall with hardware information"""
+        hardware_info = {
+            'model': 'PA-3430',
+            'family': '3000',
+            'platform_family': 'pa-3400-series',
+            'serial': '001234567890',
+            'hostname': 'datacenter-fw',
+            'sw_version': '11.0.3'
+        }
+
+        success = self.db.register_firewall('test_fw', 'https://10.0.0.1', hardware_info)
+
+        self.assertTrue(success, "Should successfully register firewall with hardware info")
+
+        # Verify data was stored
+        firewalls = self.db.get_all_firewalls()
+        self.assertEqual(len(firewalls), 1)
+
+        fw = firewalls[0]
+        self.assertEqual(fw['name'], 'test_fw')
+        self.assertEqual(fw['model'], 'PA-3430')
+        self.assertEqual(fw['family'], '3000')
+        self.assertEqual(fw['platform_family'], 'pa-3400-series')
+        self.assertEqual(fw['serial'], '001234567890')
+        self.assertEqual(fw['hostname'], 'datacenter-fw')
+        self.assertEqual(fw['sw_version'], '11.0.3')
+
+    def test_register_firewall_without_hardware_info(self):
+        """Test registering firewall without hardware info still works"""
+        success = self.db.register_firewall('test_fw', 'https://10.0.0.1')
+
+        self.assertTrue(success, "Should successfully register firewall without hardware info")
+
+        firewalls = self.db.get_all_firewalls()
+        self.assertEqual(len(firewalls), 1)
+
+        fw = firewalls[0]
+        self.assertEqual(fw['name'], 'test_fw')
+        self.assertEqual(fw['host'], 'https://10.0.0.1')
+        # Hardware fields should be None or empty
+        self.assertIn(fw.get('model'), [None, ''])
+
+    def test_register_firewall_updates_hardware_info(self):
+        """Test that re-registering firewall updates hardware info"""
+        # Register without hardware info
+        self.db.register_firewall('test_fw', 'https://10.0.0.1')
+
+        # Register again with hardware info
+        hardware_info = {
+            'model': 'PA-3430',
+            'family': '3000',
+            'sw_version': '11.0.3'
+        }
+        self.db.register_firewall('test_fw', 'https://10.0.0.1', hardware_info)
+
+        # Verify hardware info was added
+        firewalls = self.db.get_all_firewalls()
+        self.assertEqual(len(firewalls), 1)
+
+        fw = firewalls[0]
+        self.assertEqual(fw['model'], 'PA-3430')
+        self.assertEqual(fw['family'], '3000')
+        self.assertEqual(fw['sw_version'], '11.0.3')
+
+    def test_get_all_firewalls_includes_hardware_info(self):
+        """Test that get_all_firewalls returns hardware info"""
+        # Register multiple firewalls with different hardware info
+        firewalls_data = [
+            ('fw1', 'https://10.0.0.1', {'model': 'PA-3430', 'sw_version': '11.0.3'}),
+            ('fw2', 'https://10.0.0.2', {'model': 'PA-5445', 'sw_version': '11.1.0'}),
+            ('fw3', 'https://10.0.0.3', None)
+        ]
+
+        for name, host, hw_info in firewalls_data:
+            self.db.register_firewall(name, host, hw_info)
+
+        # Retrieve all firewalls
+        firewalls = self.db.get_all_firewalls()
+
+        self.assertEqual(len(firewalls), 3)
+
+        # Verify first firewall
+        fw1 = next(fw for fw in firewalls if fw['name'] == 'fw1')
+        self.assertEqual(fw1['model'], 'PA-3430')
+        self.assertEqual(fw1['sw_version'], '11.0.3')
+
+        # Verify second firewall
+        fw2 = next(fw for fw in firewalls if fw['name'] == 'fw2')
+        self.assertEqual(fw2['model'], 'PA-5445')
+        self.assertEqual(fw2['sw_version'], '11.1.0')
+
+        # Verify third firewall (no hardware info)
+        fw3 = next(fw for fw in firewalls if fw['name'] == 'fw3')
+        self.assertIn(fw3.get('model'), [None, ''])
+
+    def test_schema_migration_idempotent(self):
+        """Test that schema migration can be run multiple times safely"""
+        # Migration happens during __init__, so create multiple instances
+        db1 = EnhancedMetricsDatabase(str(self.db_path))
+        db2 = EnhancedMetricsDatabase(str(self.db_path))
+        db3 = EnhancedMetricsDatabase(str(self.db_path))
+
+        # Verify columns still exist
+        with self.db._get_connection() as conn:
+            cursor = conn.execute("PRAGMA table_info(firewalls)")
+            columns = [row[1] for row in cursor.fetchall()]
+
+        self.assertIn('model', columns)
+        self.assertIn('family', columns)
+        self.assertIn('sw_version', columns)
+
+    def test_hardware_info_with_partial_data(self):
+        """Test storing hardware info with only some fields populated"""
+        hardware_info = {
+            'model': 'PA-3430',
+            'sw_version': '11.0.3'
+            # Other fields not provided
+        }
+
+        self.db.register_firewall('test_fw', 'https://10.0.0.1', hardware_info)
+
+        firewalls = self.db.get_all_firewalls()
+        fw = firewalls[0]
+
+        self.assertEqual(fw['model'], 'PA-3430')
+        self.assertEqual(fw['sw_version'], '11.0.3')
+        # Unprovided fields should be None or empty
+        self.assertIn(fw.get('family'), [None, ''])
+        self.assertIn(fw.get('serial'), [None, ''])
+
+
 if __name__ == '__main__':
     unittest.main()
