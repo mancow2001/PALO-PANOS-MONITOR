@@ -157,7 +157,13 @@ class PanOSMonitorApp:
             deleted = self.database.cleanup_old_metrics(cleanup_days)
             if deleted > 0:
                 LOG.info(f"🧹 Cleaned up {deleted} old metrics (older than {cleanup_days} days)")
-        
+
+        # XML cleanup on startup
+        if self.config_manager.global_config.save_raw_xml:
+            xml_deleted = self._cleanup_old_xml_files()
+            if xml_deleted == 0:
+                LOG.debug(f"No old XML files to clean up (retention: {self.config_manager.global_config.xml_retention_hours}h)")
+
         LOG.info("✅ All services started successfully")
         
         # Main monitoring loop
@@ -187,9 +193,11 @@ class PanOSMonitorApp:
             status_interval = 300  # 5 minutes
             gc_interval = 300  # Run GC every 5 minutes
             memory_check_interval = 60  # Check memory every minute
+            xml_cleanup_interval = 3600  # Cleanup XML files every hour
             last_status_time = 0
             last_gc_time = 0
             last_memory_check = 0
+            last_xml_cleanup = 0
 
             # Get process for memory monitoring
             process = psutil.Process()
@@ -222,11 +230,16 @@ class PanOSMonitorApp:
                     except Exception as e:
                         LOG.debug(f"Failed to get memory info: {e}")
 
+                # Cleanup old XML files periodically
+                if current_time - last_xml_cleanup >= xml_cleanup_interval:
+                    self._cleanup_old_xml_files()
+                    last_xml_cleanup = current_time
+
                 # Print status every 5 minutes
                 if current_time - last_status_time >= status_interval:
                     self._print_status()
                     last_status_time = current_time
-                
+
                 # Sleep for 1 second
                 time.sleep(1)
                 
@@ -235,16 +248,59 @@ class PanOSMonitorApp:
         finally:
             self.stop()
     
+    def _cleanup_old_xml_files(self):
+        """Delete raw XML files older than retention period"""
+        if not self.config_manager.global_config.save_raw_xml:
+            return 0
+
+        try:
+            from datetime import datetime, timedelta
+
+            output_dir = Path(self.config_manager.global_config.output_dir)
+            xml_dir = output_dir / "raw_xml"
+
+            if not xml_dir.exists():
+                return 0
+
+            retention_hours = self.config_manager.global_config.xml_retention_hours
+            cutoff_time = time.time() - (retention_hours * 3600)
+
+            deleted_count = 0
+            total_size = 0
+
+            # Find and delete old XML files
+            for xml_file in xml_dir.rglob("*.xml"):
+                try:
+                    # Check file modification time
+                    file_mtime = xml_file.stat().st_mtime
+                    if file_mtime < cutoff_time:
+                        file_size = xml_file.stat().st_size
+                        xml_file.unlink()
+                        deleted_count += 1
+                        total_size += file_size
+                except Exception as e:
+                    LOG.debug(f"Error deleting {xml_file}: {e}")
+
+            if deleted_count > 0:
+                size_mb = total_size / (1024 * 1024)
+                LOG.info(f"🧹 Cleaned up {deleted_count} XML files older than {retention_hours}h (freed {size_mb:.2f} MB)")
+
+            return deleted_count
+
+        except Exception as e:
+            LOG.error(f"Failed to cleanup XML files: {e}")
+            return 0
+
     def _print_status(self):
         """Print current monitoring status"""
         if not self.collector_manager:
             return
-        
+
         status = self.collector_manager.get_collector_status()
         active_count = sum(1 for s in status.values() if s['thread_alive'])
-        
+
         LOG.info(f"📊 Status: {active_count}/{len(status)} collectors active")
-        
+
         # Show raw XML status if enabled
         if self.config_manager.global_config.save_raw_xml:
             output_dir = Path(self.config_manager.global_config.output_dir)
@@ -252,7 +308,7 @@ class PanOSMonitorApp:
             if xml_dir.exists():
                 xml_count = sum(1 for _ in xml_dir.rglob("*.xml"))
                 LOG.info(f"📄 Raw XML files: {xml_count} total")
-        
+
         for name, collector_status in status.items():
             if collector_status['authenticated'] and collector_status['thread_alive']:
                 last_poll = collector_status['last_poll']

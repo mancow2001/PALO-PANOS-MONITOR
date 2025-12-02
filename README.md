@@ -601,11 +601,17 @@ migrate_csv_to_database("old_panos_stats.csv", db, "legacy_firewall")
 ### Management Plane
 - **CPU Components**: User, System, Idle percentages
 - **Total Management CPU**: Combined user + system percentage
-- **🔧 FIXED**: Accurate calculation for PA-3400/5400 series
-  - These models have dedicated data plane cores at 100%
-  - System automatically detects affected models (30+ models mapped)
-  - Skips contaminated collection methods for accurate readings
-  - Logs warnings when affected models detected
+- **🔧 FIXED**: Accurate calculation for affected models using 5-minute load average method
+  - **Affected Models** (23 total): PA-400, PA-1400, PA-3400, PA-5400 series
+  - **Issue**: These models have dedicated data plane cores that contaminate traditional CPU measurements
+  - **Solution**: Uses 5-minute load average with DP core subtraction
+  - **Formula**: `mgmt_cpu = ((load_avg_5min - dp_cores) / mgmt_cores) × 100`
+  - **Benefits**:
+    - Filters transient spikes from processes like pan_logdb+
+    - Industry-standard 5-minute averaging for stability
+    - Accurate readings validated against production data (40-67% typical range)
+  - System automatically detects model and applies appropriate collection method
+  - Logs detailed status with load average and calculated management CPU
 
 ### Data Plane (Enhanced)
 - **CPU Mean**: Average across all cores (overall health)

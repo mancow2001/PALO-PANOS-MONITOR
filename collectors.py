@@ -594,6 +594,77 @@ def parse_system_info_hardware(xml_text: str) -> Dict[str, str]:
         LOG.error(f"Error parsing hardware info from system info: {e}")
         return {}
 
+def parse_mgmt_cpu_from_load_average(xml_text: str, model: str) -> Tuple[Dict[str, float], str]:
+    """
+    Parse management CPU from 5-minute load average for affected models.
+
+    For firewalls with dedicated DP cores (PA-400/1400/3400/5400 series), the DP cores
+    contribute their core count to load average regardless of CPU utilization, because
+    dedicated DP processes are always runnable.
+
+    Formula: mgmt_cpu = ((load_avg_5min - dp_cores) / mgmt_cores) × 100
+
+    Args:
+        xml_text: XML response from <show><system><resources/></system></show>
+        model: Firewall model (e.g., "PA-3430")
+
+    Returns:
+        Tuple of (metrics_dict, status_message)
+    """
+    out: Dict[str, float] = {}
+
+    try:
+        root = ET.fromstring(xml_text)
+        raw = root.findtext("result") or "".join(root.itertext())
+        if not raw:
+            return {}, "mgmt-cpu: no result text from top"
+
+        # Get core architecture for this model
+        arch = get_core_architecture(model)
+        if not arch:
+            return {}, f"mgmt-cpu: no core architecture found for {model}"
+
+        total_cores = arch['total_cores']
+        mgmt_cores = arch['mgmt_cores']
+        dp_cores = arch['dp_cores']
+
+        # Extract load average from top output first line
+        # Format: "top - HH:MM:SS up X days, load average: 18.34, 18.35, 18.06"
+        # We want the 5-minute value (second number)
+        match = re.search(r'load average[:\s]+([0-9.]+),\s*([0-9.]+),\s*([0-9.]+)', raw, re.IGNORECASE)
+        if not match:
+            return {}, "mgmt-cpu: no load average found in top output"
+
+        load_1min = float(match.group(1))
+        load_5min = float(match.group(2))  # Use 5-minute load
+        load_15min = float(match.group(3))
+
+        # Calculate management load by subtracting DP core count
+        mgmt_load = load_5min - dp_cores
+
+        # Handle edge case where load is entirely from DP cores
+        if mgmt_load < 0:
+            mgmt_load = 0
+
+        # Calculate management CPU percentage
+        mgmt_cpu = (mgmt_load / mgmt_cores) * 100
+
+        # Cap at 100% for safety (though formula should naturally stay under)
+        mgmt_cpu = min(mgmt_cpu, 100.0)
+
+        out.update({
+            "mgmt_cpu": mgmt_cpu,
+            "load_average_1min": load_1min,
+            "load_average_5min": load_5min,
+            "load_average_15min": load_15min,
+            "mgmt_load": mgmt_load
+        })
+
+        return out, f"mgmt-cpu: {mgmt_cpu:.1f}% (5min_load={load_5min:.2f}, mgmt_load={mgmt_load:.2f})"
+
+    except Exception as e:
+        return {}, f"mgmt-cpu: load average parse error - {e}"
+
 def parse_cpu_from_top(xml_text: str) -> Tuple[Dict[str, float], str]:
     """
     Parse management CPU from top CDATA (fallback method)
@@ -839,11 +910,42 @@ class EnhancedFirewallCollector:
     
     def collect_management_cpu_your_panos11(self) -> Dict[str, float]:
         """
-        Collect Management CPU using multiple methods with fallback
-        Priority: debug status > system info > system resources (top)
+        Collect Management CPU using multiple methods with fallback.
+
+        For affected models (PA-400/1400/3400/5400 series with dedicated DP cores):
+          - Use load average method exclusively (Methods 1 & 2 skipped)
+          - Load average approach is most reliable for these models
+
+        For other models:
+          - Priority: debug status > system info > system resources (top)
         """
         cpu_metrics = {}
-        
+
+        # AFFECTED MODELS: Use load average method exclusively
+        if self.is_affected_model:
+            try:
+                LOG.info(f"{self.name}: Attempting Management CPU collection via load average (5-min)")
+                xml = self.client.op("<show><system><resources/></system></show>")
+                if xml:
+                    self._save_raw_xml("system_resources", xml)
+
+                    # Use load average formula for affected models
+                    metrics, msg = parse_mgmt_cpu_from_load_average(xml, self.model)
+                    if metrics and "mgmt_cpu" in metrics:
+                        cpu_metrics.update(metrics)
+                        LOG.info(f"{self.name}: ✅ Load Average Method SUCCESS - {msg}")
+                        return cpu_metrics
+                    else:
+                        LOG.warning(f"{self.name}: Load average method failed: {msg}")
+                else:
+                    LOG.warning(f"{self.name}: Failed to get system resources: {self.client.last_error}")
+            except Exception as e:
+                LOG.warning(f"{self.name}: Load average method exception: {e}")
+
+            LOG.error(f"{self.name}: ❌ Management CPU collection failed for {self.model}")
+            return {}
+
+        # NON-AFFECTED MODELS: Use existing multi-method approach
         # Method 1: Debug status (most accurate - matches GUI)
         try:
             LOG.info(f"{self.name}: Attempting Method 1 - Debug status")
@@ -852,18 +954,16 @@ class EnhancedFirewallCollector:
                 self._save_raw_xml("debug_status", xml)
                 metrics, msg = parse_cpu_from_debug_status(xml)
                 if metrics and "mgmt_cpu" in metrics:
-                    # Keep mgmt_cpu to match database schema
-                    cpu_metrics.update(metrics)  # Include all fields (mgmt_cpu, mgmt_cpu_debug, etc.)
+                    cpu_metrics.update(metrics)
                     LOG.info(f"{self.name}: ✅ Method 1 SUCCESS - {msg}")
-                    LOG.info(f"{self.name}: Management CPU value: {cpu_metrics['mgmt_cpu']:.2f}%")
-                    return cpu_metrics  # Return immediately if successful
+                    return cpu_metrics
                 else:
                     LOG.debug(f"{self.name}: Method 1 failed to parse: {msg}")
             else:
                 LOG.debug(f"{self.name}: Method 1 failed: {self.client.last_error}")
         except Exception as e:
             LOG.debug(f"{self.name}: Method 1 exception: {e}")
-        
+
         # Method 2: System info with load average
         try:
             LOG.info(f"{self.name}: Attempting Method 2 - System info")
@@ -872,66 +972,45 @@ class EnhancedFirewallCollector:
                 self._save_raw_xml("system_info", xml)
                 metrics, msg = parse_cpu_from_system_info(xml)
                 if metrics and "mgmt_cpu" in metrics:
-                    # Keep mgmt_cpu to match database schema
-                    cpu_metrics.update(metrics)  # Include all fields
+                    cpu_metrics.update(metrics)
                     LOG.info(f"{self.name}: ✅ Method 2 SUCCESS - {msg}")
-                    LOG.info(f"{self.name}: Management CPU value: {cpu_metrics['mgmt_cpu']:.2f}%")
-                    return cpu_metrics  # Return immediately if successful
+                    return cpu_metrics
                 else:
                     LOG.debug(f"{self.name}: Method 2 failed to parse: {msg}")
             else:
                 LOG.debug(f"{self.name}: Method 2 failed: {self.client.last_error}")
         except Exception as e:
             LOG.debug(f"{self.name}: Method 2 exception: {e}")
-        
-        # Method 3: System resources (top) - fallback
-        # Skip for affected models (data plane cores contaminate management CPU)
-        if self.is_affected_model:
-            LOG.warning(
-                f"{self.name}: Skipping Method 3 (system resources/top) for {self.model} - "
-                f"this model has dedicated data plane cores at 100% that contaminate mgmt CPU. "
-                f"Methods 1 & 2 should provide accurate values."
-            )
-            LOG.error(f"{self.name}: ❌ All CPU collection methods failed - no data available")
-            return {}
 
+        # Method 3: System resources (top) - fallback for non-affected models
         try:
             LOG.info(f"{self.name}: Attempting Method 3 - System resources (top)")
             xml = self.client.op("<show><system><resources/></system></show>")
             if xml:
                 self._save_raw_xml("system_resources", xml)
-                
-                # Try the new parser first
+
+                # Try structured parser first
                 metrics, msg = parse_management_cpu_from_system_resources(xml)
                 if metrics and "management_cpu" in metrics and metrics["management_cpu"] > 0:
-                    # Rename management_cpu to mgmt_cpu to match database schema
                     cpu_metrics["mgmt_cpu"] = metrics["management_cpu"]
-                    # Also include user/sys if present
                     if "management_cpu_user" in metrics:
                         cpu_metrics["cpu_user"] = metrics["management_cpu_user"]
                     if "management_cpu_sys" in metrics:
                         cpu_metrics["cpu_system"] = metrics["management_cpu_sys"]
                     LOG.info(f"{self.name}: ✅ Method 3a SUCCESS - {msg}")
-                    LOG.info(f"{self.name}: Management CPU value: {cpu_metrics['mgmt_cpu']:.2f}%")
                     return cpu_metrics
-                else:
-                    LOG.debug(f"{self.name}: Method 3a returned zero or no data: {msg}")
-                
-                # Fall back to the enhanced top parser
+
+                # Fall back to top parser
                 metrics, msg = parse_cpu_from_top(xml)
                 if metrics and "mgmt_cpu" in metrics:
-                    # Keep mgmt_cpu to match database schema
-                    cpu_metrics.update(metrics)  # Include cpu_user, cpu_system, cpu_idle, mgmt_cpu
+                    cpu_metrics.update(metrics)
                     LOG.info(f"{self.name}: ✅ Method 3b SUCCESS - {msg}")
-                    LOG.info(f"{self.name}: Management CPU value: {cpu_metrics['mgmt_cpu']:.2f}%")
                     return cpu_metrics
-                else:
-                    LOG.debug(f"{self.name}: Method 3b failed to parse: {msg}")
             else:
                 LOG.warning(f"{self.name}: Method 3 failed to get XML: {self.client.last_error}")
         except Exception as e:
             LOG.warning(f"{self.name}: Method 3 exception: {e}")
-        
+
         LOG.error(f"{self.name}: ❌ ALL CPU MONITORING METHODS FAILED")
         return {}
 
