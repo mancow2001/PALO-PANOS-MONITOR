@@ -6,3 +6,4 @@ config.py
 /.claude
 claude.md
 /sample_xml
+data/metrics.db

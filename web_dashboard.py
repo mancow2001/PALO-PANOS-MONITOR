@@ -129,6 +129,9 @@ class EnhancedWebDashboard:
                         else:
                             LOG.warning(f"Could not get config for firewall: {fw_name}")
 
+                # Define cache key before conditional
+                cache_key = "dashboard_overview"
+
                 # Refresh database list if we registered any new firewalls
                 if newly_registered:
                     LOG.info(f"Registered {len(newly_registered)} new firewall(s): {', '.join(newly_registered)}")
@@ -137,7 +140,6 @@ class EnhancedWebDashboard:
                     LOG.debug(f"Bypassing cache - just registered {len(newly_registered)} new firewall(s)")
                 else:
                     # Check cache only if no new registrations
-                    cache_key = "dashboard_overview"
                     cached_data = self.cache.get(cache_key)
                     if cached_data is not None:
                         LOG.debug("Serving dashboard from cache (no new firewalls detected)")
