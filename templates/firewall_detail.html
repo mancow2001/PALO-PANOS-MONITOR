@@ -307,6 +307,63 @@
             return new Date(utcDatetime);
         }
 
+        // Timestamp-based hover synchronization helpers
+        // Binary search to find closest timestamp index in sorted array
+        function findClosestTimestampIndex(timestamps, targetTime, toleranceMs = 60000) {
+            if (!timestamps || timestamps.length === 0) return -1;
+
+            const targetMs = targetTime.getTime();
+            let left = 0;
+            let right = timestamps.length - 1;
+            let closest = -1;
+            let closestDiff = Infinity;
+
+            // Binary search for efficiency
+            while (left <= right) {
+                const mid = Math.floor((left + right) / 2);
+                const midTime = timestamps[mid] instanceof Date ? timestamps[mid].getTime() : new Date(timestamps[mid]).getTime();
+                const diff = Math.abs(midTime - targetMs);
+
+                if (diff < closestDiff) {
+                    closestDiff = diff;
+                    closest = mid;
+                }
+
+                if (midTime < targetMs) {
+                    left = mid + 1;
+                } else if (midTime > targetMs) {
+                    right = mid - 1;
+                } else {
+                    return mid; // Exact match
+                }
+            }
+
+            // Return index only if within tolerance
+            return closestDiff <= toleranceMs ? closest : -1;
+        }
+
+        // Extract timestamp from chart data point based on chart type
+        function getTimestampFromChartPoint(chart, dataIndex, datasetIndex = 0) {
+            if (!chart || !chart.data || !chart.data.datasets) return null;
+
+            const dataset = chart.data.datasets[datasetIndex];
+            if (!dataset || !dataset.data || dataIndex >= dataset.data.length) return null;
+
+            const dataPoint = dataset.data[dataIndex];
+
+            // Handle {x, y} format (interface chart)
+            if (dataPoint && typeof dataPoint === 'object' && dataPoint.x) {
+                return new Date(dataPoint.x);
+            }
+
+            // Handle array format with labels (cpu, session, pbuf charts)
+            if (chart.data.labels && dataIndex < chart.data.labels.length) {
+                return new Date(chart.data.labels[dataIndex]);
+            }
+
+            return null;
+        }
+
         function toggleInterfaceView(view) {
             currentInterfaceView = view;
             document.querySelectorAll('[id^="if-"]').forEach(btn => btn.classList.remove('active'));
@@ -546,22 +603,11 @@
                                 console.log(`Auto-selected ${selectedInterfaces.length} enabled interfaces from config`);
                             }
 
-                            // If no config or no enabled interfaces matched, use smart selection
+                            // If no config or no enabled interfaces matched, select all interfaces
                             if (selectedInterfaces.length === 0) {
-                                // Smart selection: prioritize important interfaces
-                                const priorityInterfaces = ['ethernet1/1', 'ethernet1/2', 'ae1', 'ae2'];
-                                const selectedPriority = availableInterfaces.filter(iface =>
-                                    priorityInterfaces.some(priority => iface.toLowerCase().includes(priority))
-                                );
-
-                                if (selectedPriority.length > 0) {
-                                    selectedInterfaces = selectedPriority.slice(0, Math.min(5, selectedPriority.length));
-                                    console.log(`Auto-selected ${selectedInterfaces.length} priority interfaces`);
-                                } else {
-                                    // Fallback: select first few interfaces (up to 5)
-                                    selectedInterfaces = availableInterfaces.slice(0, Math.min(5, availableInterfaces.length));
-                                    console.log(`Auto-selected first ${selectedInterfaces.length} interfaces`);
-                                }
+                                // Select all available interfaces by default
+                                selectedInterfaces = [...availableInterfaces];
+                                console.log(`Auto-selected all ${selectedInterfaces.length} available interfaces`);
                             }
                             updateInterfaceSelector();
                         }
@@ -807,7 +853,34 @@
                                 title: function(context) {
                                     const date = new Date(context[0].parsed.x);
                                     return date.toLocaleString();
+                                },
+                                // Filter tooltip items to only show data at matching timestamps
+                                label: function(context) {
+                                    const chart = context.chart;
+                                    const dataPoint = context.raw;
+
+                                    // For {x, y} format data (interface chart), verify timestamp matches
+                                    if (dataPoint && typeof dataPoint === 'object' && dataPoint.x) {
+                                        // Get the hovered timestamp from the first dataset's point
+                                        const hoveredX = context.parsed.x;
+                                        const pointX = new Date(dataPoint.x).getTime();
+
+                                        // Only show if within 60 seconds of hovered time
+                                        const diff = Math.abs(hoveredX - pointX);
+                                        if (diff > 60000) {
+                                            return null; // Hide this item from tooltip
+                                        }
+                                    }
+
+                                    // Default label format
+                                    const label = context.dataset.label || '';
+                                    const value = context.parsed.y;
+                                    return `${label}: ${value !== null ? value.toFixed(1) : '--'}`;
                                 }
+                            },
+                            // Filter out null labels
+                            filter: function(tooltipItem) {
+                                return tooltipItem !== null;
                             }
                         }
                     },
@@ -818,7 +891,8 @@
                     onHover: (event, activeElements, chart) => {
                         if (activeElements.length > 0) {
                             const dataIndex = activeElements[0].index;
-                            syncChartHover(chart, dataIndex);
+                            const datasetIndex = activeElements[0].datasetIndex;
+                            syncChartHover(chart, dataIndex, datasetIndex);
                         }
                     }
                 }
@@ -904,35 +978,42 @@
 
         function updateInterfaceChart() {
             if (!lastFetchedInterfaceData || Object.keys(lastFetchedInterfaceData).length === 0) return;
-            
+
             const datasets = [];
             const colors = ['#e74c3c', '#3498db', '#2ecc71', '#f39c12', '#9b59b6', '#e67e22', '#1abc9c', '#34495e'];
             let colorIndex = 0;
-            
+
             selectedInterfaces.forEach(interfaceName => {
                 const interfaceData = lastFetchedInterfaceData[interfaceName];
                 if (!interfaceData || interfaceData.length === 0) return;
-                
+
                 const reversedData = [...interfaceData].reverse();
-                const localTimes = reversedData.map(d => convertFromUserTimezone(d.timestamp));
                 const color = colors[colorIndex % colors.length];
                 colorIndex++;
-                
+
+                // Use {x, y} format so each interface can have its own timestamps
+                // This fixes the issue where interfaces with different data ranges would break the chart
                 if (currentInterfaceView === 'rx' || currentInterfaceView === 'both') {
                     datasets.push({
                         label: `${interfaceName} RX`,
-                        data: reversedData.map(d => d.rx_mbps || 0),
+                        data: reversedData.map(d => ({
+                            x: convertFromUserTimezone(d.timestamp),
+                            y: d.rx_mbps || 0
+                        })),
                         borderColor: color,
                         backgroundColor: color + '20',
                         fill: false,
                         tension: 0.4
                     });
                 }
-                
+
                 if (currentInterfaceView === 'tx' || currentInterfaceView === 'both') {
                     datasets.push({
                         label: `${interfaceName} TX`,
-                        data: reversedData.map(d => d.tx_mbps || 0),
+                        data: reversedData.map(d => ({
+                            x: convertFromUserTimezone(d.timestamp),
+                            y: d.tx_mbps || 0
+                        })),
                         borderColor: color,
                         backgroundColor: color + '20',
                         fill: false,
@@ -940,11 +1021,14 @@
                         borderDash: currentInterfaceView === 'both' ? [5, 5] : []
                     });
                 }
-                
+
                 if (currentInterfaceView === 'total') {
                     datasets.push({
                         label: `${interfaceName} Total`,
-                        data: reversedData.map(d => d.total_mbps || 0),
+                        data: reversedData.map(d => ({
+                            x: convertFromUserTimezone(d.timestamp),
+                            y: d.total_mbps || 0
+                        })),
                         borderColor: color,
                         backgroundColor: color + '20',
                         fill: false,
@@ -952,15 +1036,9 @@
                     });
                 }
             });
-            
-            // Use the first interface's timestamps for the chart
-            let localTimes = [];
-            if (selectedInterfaces.length > 0 && lastFetchedInterfaceData[selectedInterfaces[0]]) {
-                const firstInterfaceData = [...lastFetchedInterfaceData[selectedInterfaces[0]]].reverse();
-                localTimes = firstInterfaceData.map(d => convertFromUserTimezone(d.timestamp));
-            }
-            
-            charts.interface.data.labels = localTimes;
+
+            // Clear labels since we're using {x, y} data format with time scale
+            charts.interface.data.labels = [];
             charts.interface.data.datasets = datasets;
             charts.interface.update('active');
         }
@@ -1210,63 +1288,121 @@
         }
 
         // Synchronized chart hover and hover summary functions
-        function syncChartHover(sourceChart, dataIndex) {
-            // Update all charts to show tooltip at the same index
+        // NEW: Timestamp-based synchronization for accurate cross-chart hover
+        function syncChartHover(sourceChart, dataIndex, datasetIndex = 0) {
+            // Step 1: Get the actual timestamp from the hovered point
+            const hoveredTimestamp = getTimestampFromChartPoint(sourceChart, dataIndex, datasetIndex);
+            if (!hoveredTimestamp) {
+                hideHoverSummary();
+                return;
+            }
+
+            // Step 2: Sync other charts by finding matching timestamps
             Object.keys(charts).forEach(chartKey => {
                 const chart = charts[chartKey];
-                if (chart && chart !== sourceChart) {
-                    // Set active elements for all charts
-                    const activeElements = chart.data.datasets.map((dataset, datasetIndex) => ({
-                        datasetIndex: datasetIndex,
-                        index: dataIndex
-                    }));
+                if (!chart || chart === sourceChart) return;
+
+                let matchedIndex = -1;
+
+                if (chartKey === 'interface') {
+                    // Interface chart uses {x, y} format - find closest point in first visible dataset
+                    const visibleDatasets = chart.data.datasets.filter(ds => !ds.hidden);
+                    if (visibleDatasets.length > 0 && visibleDatasets[0].data.length > 0) {
+                        const timestamps = visibleDatasets[0].data.map(p => new Date(p.x));
+                        matchedIndex = findClosestTimestampIndex(timestamps, hoveredTimestamp, 60000);
+                    }
+                } else {
+                    // Other charts use labels array
+                    if (chart.data.labels && chart.data.labels.length > 0) {
+                        const timestamps = chart.data.labels.map(t => new Date(t));
+                        matchedIndex = findClosestTimestampIndex(timestamps, hoveredTimestamp, 60000);
+                    }
+                }
+
+                if (matchedIndex >= 0) {
+                    // Set active elements for matched index
+                    const activeElements = chart.data.datasets
+                        .map((dataset, dsIndex) => ({
+                            datasetIndex: dsIndex,
+                            index: matchedIndex
+                        }))
+                        .filter((_, dsIndex) => !chart.data.datasets[dsIndex].hidden);
+
                     chart.setActiveElements(activeElements);
                     chart.tooltip.setActiveElements(activeElements, {x: 0, y: 0});
-                    chart.update('none'); // Update without animation
+                    chart.update('none');
+                } else {
+                    // No matching point found - clear this chart's tooltip
+                    chart.setActiveElements([]);
+                    chart.tooltip.setActiveElements([], {x: 0, y: 0});
+                    chart.update('none');
                 }
             });
 
-            // Update hover summary card
-            updateHoverSummary(dataIndex);
+            // Step 3: Update hover summary using timestamp-based lookup
+            updateHoverSummaryByTimestamp(hoveredTimestamp);
         }
 
-        function updateHoverSummary(dataIndex) {
+        // NEW: Timestamp-based hover summary update (hybrid approach: charts show 0, summary shows "-- (no data)")
+        function updateHoverSummaryByTimestamp(targetTimestamp) {
             if (!lastFetchedData || lastFetchedData.length === 0) return;
 
-            // Get data at the specific index (remember data is reversed)
+            const targetMs = targetTimestamp.getTime();
+            const toleranceMs = 60000; // 60 second tolerance
+
+            // Find closest main metrics point
             const reversedData = [...lastFetchedData].reverse();
-            if (dataIndex >= reversedData.length) return;
+            let closestMetricsIndex = -1;
+            let closestMetricsDiff = Infinity;
 
-            const dataPoint = reversedData[dataIndex];
-            const timestamp = new Date(dataPoint.timestamp);
+            reversedData.forEach((item, index) => {
+                const itemMs = new Date(item.timestamp).getTime();
+                const diff = Math.abs(itemMs - targetMs);
+                if (diff < closestMetricsDiff) {
+                    closestMetricsDiff = diff;
+                    closestMetricsIndex = index;
+                }
+            });
 
-            // Update timestamp
-            document.getElementById('hoverSummaryTime').textContent = timestamp.toLocaleString();
+            // Update timestamp display
+            document.getElementById('hoverSummaryTime').textContent = targetTimestamp.toLocaleString();
 
-            // Update CPU values
-            document.getElementById('hoverMgmtCpu').innerHTML = `${formatValue(dataPoint.mgmt_cpu)} <span style="color: #95a5a6;">%</span>`;
+            if (closestMetricsIndex === -1 || closestMetricsDiff > toleranceMs) {
+                // No matching metrics data point - show "no data" indicators
+                document.getElementById('hoverMgmtCpu').innerHTML = '<span style="color: #95a5a6;">-- (no data)</span>';
+                document.getElementById('hoverDpCpu').innerHTML = '<span style="color: #95a5a6;">-- (no data)</span>';
+                document.getElementById('hoverPbuf').innerHTML = '<span style="color: #95a5a6;">-- (no data)</span>';
+            } else {
+                const dataPoint = reversedData[closestMetricsIndex];
 
-            let dpCpuValue, dpCpuLabel;
-            switch(currentCpuAggregation) {
-                case 'max':
-                    dpCpuValue = dataPoint.data_plane_cpu_max;
-                    dpCpuLabel = 'Data Plane CPU (Max):';
-                    break;
-                case 'p95':
-                    dpCpuValue = dataPoint.data_plane_cpu_p95;
-                    dpCpuLabel = 'Data Plane CPU (P95):';
-                    break;
-                default:
-                    dpCpuValue = dataPoint.data_plane_cpu_mean;
-                    dpCpuLabel = 'Data Plane CPU (Mean):';
+                // Update CPU values
+                document.getElementById('hoverMgmtCpu').innerHTML =
+                    `${formatValue(dataPoint.mgmt_cpu)} <span style="color: #95a5a6;">%</span>`;
+
+                let dpCpuValue, dpCpuLabel;
+                switch(currentCpuAggregation) {
+                    case 'max':
+                        dpCpuValue = dataPoint.data_plane_cpu_max;
+                        dpCpuLabel = 'Data Plane CPU (Max):';
+                        break;
+                    case 'p95':
+                        dpCpuValue = dataPoint.data_plane_cpu_p95;
+                        dpCpuLabel = 'Data Plane CPU (P95):';
+                        break;
+                    default:
+                        dpCpuValue = dataPoint.data_plane_cpu_mean;
+                        dpCpuLabel = 'Data Plane CPU (Mean):';
+                }
+                document.getElementById('hoverDpCpuLabel').textContent = dpCpuLabel;
+                document.getElementById('hoverDpCpu').innerHTML =
+                    `${formatValue(dpCpuValue)} <span style="color: #95a5a6;">%</span>`;
+
+                // Update packet buffer
+                document.getElementById('hoverPbuf').innerHTML =
+                    `${formatValue(dataPoint.pbuf_util_percent)} <span style="color: #95a5a6;">%</span>`;
             }
-            document.getElementById('hoverDpCpuLabel').textContent = dpCpuLabel;
-            document.getElementById('hoverDpCpu').innerHTML = `${formatValue(dpCpuValue)} <span style="color: #95a5a6;">%</span>`;
 
-            // Update packet buffer
-            document.getElementById('hoverPbuf').innerHTML = `${formatValue(dataPoint.pbuf_util_percent)} <span style="color: #95a5a6;">%</span>`;
-
-            // Update interface data if available
+            // Update interface data using timestamp matching
             const interfaceSection = document.getElementById('hoverInterfaceSection');
             const interfaceDataDiv = document.getElementById('hoverInterfaceData');
 
@@ -1277,11 +1413,32 @@
                 selectedInterfaces.forEach(interfaceName => {
                     const interfaceData = lastFetchedInterfaceData[interfaceName];
                     if (interfaceData && interfaceData.length > 0) {
+                        // Find closest interface data point by timestamp
                         const reversedInterfaceData = [...interfaceData].reverse();
-                        if (dataIndex < reversedInterfaceData.length) {
-                            const interfacePoint = reversedInterfaceData[dataIndex];
-                            const displayName = getInterfaceDisplayName(interfaceName, window.currentInterfaceConfig);
+                        let closestIfaceIndex = -1;
+                        let closestIfaceDiff = Infinity;
 
+                        reversedInterfaceData.forEach((item, index) => {
+                            const itemMs = new Date(item.timestamp).getTime();
+                            const diff = Math.abs(itemMs - targetMs);
+                            if (diff < closestIfaceDiff) {
+                                closestIfaceDiff = diff;
+                                closestIfaceIndex = index;
+                            }
+                        });
+
+                        const displayName = getInterfaceDisplayName(interfaceName, window.currentInterfaceConfig);
+
+                        // Debug: Log tolerance check values
+                        console.log(`Interface ${interfaceName}: targetMs=${targetMs}, closestDiff=${closestIfaceDiff}ms, tolerance=${toleranceMs}ms, passes=${closestIfaceDiff <= toleranceMs}`);
+
+                        // Ensure valid match within tolerance (explicit checks for edge cases)
+                        const withinTolerance = closestIfaceIndex >= 0 &&
+                                                Number.isFinite(closestIfaceDiff) &&
+                                                closestIfaceDiff <= toleranceMs;
+
+                        if (withinTolerance) {
+                            const interfacePoint = reversedInterfaceData[closestIfaceIndex];
                             interfaceHtml += `
                                 <div class="hover-summary-item">
                                     <span class="hover-summary-label">${displayName}:</span>
@@ -1290,25 +1447,50 @@
                                     </span>
                                 </div>
                             `;
+                        } else {
+                            // No matching interface data at this timestamp
+                            interfaceHtml += `
+                                <div class="hover-summary-item">
+                                    <span class="hover-summary-label">${displayName}:</span>
+                                    <span class="hover-summary-value" style="color: #95a5a6;">-- (no data)</span>
+                                </div>
+                            `;
                         }
                     }
                 });
 
-                interfaceDataDiv.innerHTML = interfaceHtml || '<div style="color: #95a5a6; font-style: italic; text-align: center;">No data at this point</div>';
+                interfaceDataDiv.innerHTML = interfaceHtml ||
+                    '<div style="color: #95a5a6; font-style: italic; text-align: center;">No interface data available</div>';
             } else {
                 interfaceSection.style.display = 'none';
             }
 
-            // Update session statistics if available
+            // Update session statistics using timestamp matching
             const sessionSection = document.getElementById('hoverSessionSection');
             if (lastFetchedSessionStats && lastFetchedSessionStats.length > 0) {
                 sessionSection.style.display = 'block';
+
+                // Find closest session data point by timestamp
                 const reversedSessionData = [...lastFetchedSessionStats].reverse();
-                if (dataIndex < reversedSessionData.length) {
-                    const sessionPoint = reversedSessionData[dataIndex];
-                    document.getElementById('hoverActiveSessions').innerHTML = `${formatValue(sessionPoint.active_sessions, 0)} <span style="color: #95a5a6;">sessions</span>`;
+                let closestSessionIndex = -1;
+                let closestSessionDiff = Infinity;
+
+                reversedSessionData.forEach((item, index) => {
+                    const itemMs = new Date(item.timestamp).getTime();
+                    const diff = Math.abs(itemMs - targetMs);
+                    if (diff < closestSessionDiff) {
+                        closestSessionDiff = diff;
+                        closestSessionIndex = index;
+                    }
+                });
+
+                if (closestSessionIndex >= 0 && closestSessionDiff <= toleranceMs) {
+                    const sessionPoint = reversedSessionData[closestSessionIndex];
+                    document.getElementById('hoverActiveSessions').innerHTML =
+                        `${formatValue(sessionPoint.active_sessions, 0)} <span style="color: #95a5a6;">sessions</span>`;
                 } else {
-                    document.getElementById('hoverActiveSessions').innerHTML = '<span style="color: #95a5a6;">--</span>';
+                    document.getElementById('hoverActiveSessions').innerHTML =
+                        '<span style="color: #95a5a6;">-- (no data)</span>';
                 }
             } else {
                 sessionSection.style.display = 'none';
